@@ -57,4 +57,4 @@ Exit codes: `0` finished · `1` refused (manifest or resume mismatch) · `2` usa
 - A full run takes about 7 hours on the free tier. Keep the machine awake: sleep pauses the run.
 - Don't commit or edit tracked files while a run may still need `--resume` (the commit must
   match). For long runs, use a separate clean checkout: `git worktree add ../querymind-eval HEAD`.
-- Never run two `qm-eval` processes against the same run folder.
+- Only one `qm-eval` can write to a run folder: it holds `<run folder>/.qm-eval.lock` while running, and a second process is refused (exit 1). If a run was killed and left the lock behind, check that no `qm-eval` is running, then delete the lock file.

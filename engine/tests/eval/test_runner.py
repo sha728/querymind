@@ -284,3 +284,38 @@ async def test_resume_refuses_changed_technique_flag(spec: RunSpec, tmp_path: Pa
     )
     with pytest.raises(ResumeMismatch, match="flags"):
         changed.check_resumable(run_dir)
+
+
+# --- one writer per run folder (design §10.3 v0.6) ---
+
+
+async def test_locked_run_dir_is_refused_without_writing(spec: RunSpec, tmp_path: Path) -> None:
+    from qm_eval.runner import LOCK_NAME, RunLocked
+
+    llm = ScriptedLLM(*REPLIES)
+    r = make_runner(spec, llm, tmp_path)
+    run_dir = r.create_run_dir()
+    (run_dir / LOCK_NAME).write_text("pid=1234 host=other", encoding="utf-8")
+    with pytest.raises(RunLocked, match="delete"):
+        await r.run(run_dir)
+    assert not (run_dir / "results.jsonl").exists()
+    assert llm.calls == []
+    assert (run_dir / LOCK_NAME).exists()  # someone else's lock is never removed
+
+
+async def test_lock_is_released_after_finishing(spec: RunSpec, tmp_path: Path) -> None:
+    from qm_eval.runner import LOCK_NAME
+
+    run_dir = await make_runner(spec, ScriptedLLM(*REPLIES), tmp_path).run()
+    assert not (run_dir / LOCK_NAME).exists()
+
+
+async def test_lock_is_released_after_interruption(spec: RunSpec, tmp_path: Path) -> None:
+    from qm_eval.runner import LOCK_NAME
+
+    llm = ScriptedLLM(REPLIES[0], LLMError("LLM_RATE_LIMITED", "quota"))
+    r = make_runner(spec, llm, tmp_path)
+    run_dir = r.create_run_dir()
+    with pytest.raises(RunInterrupted):
+        await r.run(run_dir)
+    assert not (run_dir / LOCK_NAME).exists()

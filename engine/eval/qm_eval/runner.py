@@ -15,7 +15,8 @@ import os
 import platform
 import subprocess
 from collections import Counter
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -100,6 +101,37 @@ class RunInterrupted(Exception):
 
 class ResumeMismatch(Exception):
     """The current settings differ from the run being resumed."""
+
+
+class RunLocked(Exception):
+    """Another process holds this run folder's lock (design §10.3 v0.6)."""
+
+
+LOCK_NAME = ".qm-eval.lock"
+
+
+@contextmanager
+def run_lock(run_dir: Path) -> Iterator[None]:
+    """One writer per run folder: exclusive-create a lock file, remove it on exit.
+
+    No automatic stale-lock detection: probing a PID with ``os.kill(pid, 0)`` terminates the
+    process on Windows. A lock left by a killed process is deleted by hand.
+    """
+    path = run_dir / LOCK_NAME
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        holder = path.read_text(encoding="utf-8", errors="replace").strip()
+        raise RunLocked(
+            f"{run_dir} is locked by another qm-eval process ({holder}). "
+            f"If no qm-eval is running, delete {path} and retry."
+        ) from None
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"pid={os.getpid()} host={platform.node()} since={datetime.now(UTC).isoformat()}")
+    try:
+        yield
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -398,6 +430,13 @@ class EvalRunner:
         spec = self.spec
         verify_manifest(spec.data_root, spec.manifest)
         run_dir = run_dir or self.create_run_dir()
+        with run_lock(run_dir):
+            await self._run_locked(run_dir)
+        summarize(run_dir, ended_at=self._now())
+        return run_dir
+
+    async def _run_locked(self, run_dir: Path) -> None:
+        spec = self.spec
         results_path = run_dir / "results.jsonl"
         done = {int(r["question_id"]) for r in read_results(results_path)}  # type: ignore[call-overload]
 
@@ -425,6 +464,3 @@ class EvalRunner:
                 status=res.status,
                 correct=score.correct,
             )
-
-        summarize(run_dir, ended_at=self._now())
-        return run_dir

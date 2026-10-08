@@ -28,6 +28,7 @@ from qm_eval.runner import (
     EvalRunner,
     ResumeMismatch,
     RunInterrupted,
+    RunLocked,
     RunSpec,
 )
 from qm_eval.spider import (
@@ -133,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_INTERRUPTED
-    except (ManifestError, ResumeMismatch) as e:
+    except (ManifestError, ResumeMismatch, RunLocked) as e:
         print(f"Refused: {e}", file=sys.stderr)
         return EXIT_REFUSED
     except ValueError as e:

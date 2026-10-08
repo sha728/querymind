@@ -209,3 +209,17 @@ def test_bad_subset_size_is_a_usage_error(env: Env) -> None:
         cli.main(env.args("--subset", "0"))
     assert exit_info.value.code == 2
     assert cli.main(env.args("--subset", "99")) == 2  # larger than the split
+
+
+def test_second_process_on_same_run_is_refused(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from qm_eval.runner import LOCK_NAME
+
+    run_dir = _start_run(env)
+    (run_dir / LOCK_NAME).write_text("pid=999 host=elsewhere", encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(env.args("--subset", "3", "--resume", str(run_dir))) == 1
+    err = capsys.readouterr().err
+    assert "locked by another qm-eval" in err and LOCK_NAME in err
+    assert len(read_results(run_dir / "results.jsonl")) == 1
