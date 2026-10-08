@@ -1,4 +1,26 @@
+import os
+from collections.abc import Callable
+from pathlib import Path
+
 import pytest
+
+SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+
+@pytest.fixture
+def snapshot() -> Callable[[str, str], None]:
+    """Compare text with tests/snapshots/<name>. Set QM_UPDATE_SNAPSHOTS=1 to (re)write."""
+
+    def check(name: str, text: str) -> None:
+        path = SNAPSHOT_DIR / name
+        if os.environ.get("QM_UPDATE_SNAPSHOTS") == "1":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+            return
+        assert path.exists(), f"missing snapshot {name}; run with QM_UPDATE_SNAPSHOTS=1"
+        assert text == path.read_text(encoding="utf-8"), f"snapshot {name} changed"
+
+    return check
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
