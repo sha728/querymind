@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -31,10 +32,19 @@ DEFAULTS: dict[str, Any] = {
     "embed_base_url": "http://host.docker.internal:11434/v1",
     "embed_model": "nomic-embed-text",
     "target_db_host": "target-db",
+    "target_db_port": 5432,
     "target_db_name": "northwind",
     "target_db_ro_user": "querymind_ro",
     "target_db_ro_password": None,
 }
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def make(**kwargs: object) -> EngineConfig:
+    """Build a config that ignores any developer .env file (design §6.6)."""
+    return EngineConfig(_env_file=None, **kwargs)  # type: ignore[arg-type]
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +55,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_every_documented_key_has_its_default() -> None:
-    cfg = EngineConfig()
+    cfg = make()
     assert set(DEFAULTS) == set(EngineConfig.model_fields)
     for name, expected in DEFAULTS.items():
         assert getattr(cfg, name) == expected, name
@@ -63,7 +73,7 @@ def test_env_overrides_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TARGET_DB_HOST", "localhost")
     monkeypatch.setenv("TARGET_DB_RO_PASSWORD", "pw")
 
-    cfg = EngineConfig()
+    cfg = make()
 
     assert cfg.dialect == "sqlite"
     assert cfg.linking_mode == "on"
@@ -82,38 +92,103 @@ def test_env_overrides_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("bad", [None, 0, -1])
 def test_product_rejects_disabled_or_nonpositive_row_limit(bad: int | None) -> None:
     with pytest.raises(ValidationError, match="row_limit"):
-        EngineConfig(dialect="postgres", row_limit=bad)
+        make(dialect="postgres", row_limit=bad)
 
 
 def test_eval_may_disable_row_limit() -> None:
-    cfg = EngineConfig(dialect="sqlite", row_limit=None)
+    cfg = make(dialect="sqlite", row_limit=None)
     assert cfg.row_limit is None
 
 
 def test_eval_still_rejects_nonpositive_row_limit() -> None:
     with pytest.raises(ValidationError, match="row_limit"):
-        EngineConfig(dialect="sqlite", row_limit=0)
+        make(dialect="sqlite", row_limit=0)
 
 
 def test_invalid_enum_value_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QM_DIALECT", "mysql")
     with pytest.raises(ValidationError):
-        EngineConfig()
+        make()
 
 
 def test_groq_requires_api_key() -> None:
     with pytest.raises(ValidationError, match="llm_api_key"):
-        EngineConfig(llm_provider="groq")
+        make(llm_provider="groq")
 
 
 def test_secrets_not_exposed_in_repr() -> None:
-    cfg = EngineConfig(llm_api_key="sk-secret", target_db_ro_password="db-secret")
+    cfg = make(llm_api_key="sk-secret", target_db_ro_password="db-secret")
     text = repr(cfg) + str(cfg.model_dump())
     assert "sk-secret" not in text
     assert "db-secret" not in text
 
 
 def test_config_is_immutable() -> None:
-    cfg = EngineConfig()
+    cfg = make()
     with pytest.raises(ValidationError):
         cfg.row_limit = None  # type: ignore[misc]
+
+
+# --- .env loading (design E9) ---
+
+
+def _write(path: Path, *lines: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_loads_values_from_env_file(tmp_path: Path) -> None:
+    env = _write(
+        tmp_path / ".env",
+        "QM_LLM_MODEL=from-file",
+        "TARGET_DB_PORT=5433",
+        "TARGET_DB_RO_PASSWORD=pw",
+        "APP_DB_NAME=x",
+    )
+    cfg = EngineConfig(_env_file=env)
+    assert cfg.llm_model == "from-file"
+    assert cfg.target_db_port == 5433
+    assert cfg.target_db_ro_password is not None
+    assert cfg.target_db_ro_password.get_secret_value() == "pw"
+
+
+def test_env_var_overrides_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _write(tmp_path / ".env", "QM_LLM_MODEL=from-file", "QM_MAX_CORRECTIONS=5")
+    monkeypatch.setenv("QM_LLM_MODEL", "from-env")
+    cfg = EngineConfig(_env_file=env)
+    assert cfg.llm_model == "from-env"
+    assert cfg.max_corrections == 5
+
+
+def test_code_value_overrides_env_and_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _write(tmp_path / ".env", "QM_LINKING_MODE=auto")
+    monkeypatch.setenv("QM_LINKING_MODE", "off")
+    assert EngineConfig(_env_file=env, linking_mode="on").linking_mode == "on"
+
+
+def test_missing_file_is_ignored(tmp_path: Path) -> None:
+    cfg = EngineConfig(_env_file=tmp_path / "does-not-exist.env")
+    assert cfg.llm_model == DEFAULTS["llm_model"]
+
+
+def test_default_search_order_parent_then_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path / ".env", "QM_LLM_MODEL=parent", "QM_FEW_SHOT_K=7")
+    _write(tmp_path / "engine" / ".env", "QM_LLM_MODEL=cwd")
+    monkeypatch.chdir(tmp_path / "engine")
+    cfg = EngineConfig()
+    assert cfg.llm_model == "cwd"  # ./.env wins over ../.env
+    assert cfg.few_shot_k == 7  # keys only in ../.env still load
+
+
+def test_env_example_parses_with_host_values() -> None:
+    cfg = EngineConfig(_env_file=REPO_ROOT / ".env.example")
+    assert cfg.target_db_host == "localhost"
+    assert cfg.target_db_port == 5433
+    assert cfg.llm_base_url == "http://localhost:11434/v1"
+    assert cfg.embed_base_url == "http://localhost:11434/v1"
+    assert cfg.llm_provider == "ollama"  # inline comment stripped
+    assert cfg.llm_api_key is None  # empty value treated as unset
+    assert cfg.row_limit == 1000

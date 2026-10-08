@@ -16,10 +16,18 @@ class EngineConfig(BaseSettings):
     Pipeline and LLM keys use the ``QM_`` prefix. Target DB credentials keep the
     ``TARGET_DB_*`` names shared with docker-compose (R1.1). The evaluation harness
     builds this object in-process with its own values (design §10.2).
+
+    Loading order, lowest to highest priority (design §6.6, E9): defaults, ``../.env``,
+    ``./.env``, environment variables, values passed in code. Both files are optional,
+    so this works from the repo root, from ``engine/``, and in a container (no file).
+    Pass ``_env_file=None`` to ignore ``.env`` files entirely (tests do).
     """
 
     model_config = SettingsConfigDict(
         env_prefix="QM_",
+        env_file=("../.env", ".env"),
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
         populate_by_name=True,
         extra="ignore",
         frozen=True,
@@ -55,6 +63,7 @@ class EngineConfig(BaseSettings):
 
     # --- Target DB, read-only role (R1.1, R4.1) ---
     target_db_host: str = Field(default="target-db", validation_alias="TARGET_DB_HOST")
+    target_db_port: int = Field(default=5432, gt=0, lt=65536, validation_alias="TARGET_DB_PORT")
     target_db_name: str = Field(default="northwind", validation_alias="TARGET_DB_NAME")
     target_db_ro_user: str = Field(default="querymind_ro", validation_alias="TARGET_DB_RO_USER")
     target_db_ro_password: SecretStr | None = Field(
