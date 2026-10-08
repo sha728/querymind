@@ -15,6 +15,10 @@ dependencies = [
     "structlog==26.1.0",
     "pyyaml==6.0.3",
     "httpx==0.28.1",
+    # Vendored Spider evaluation (eval/qm_eval/vendor/test_suite) needs these.
+    "nltk==3.10.3",
+    "sqlparse==0.6.0",
+    "tqdm==4.70.1",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +39,8 @@ packages = ["src/qm_engine", "eval/qm_eval"]
 target-version = "py311"
 line-length = 100
 src = ["src", "eval", "tests"]
+# Vendored third-party code keeps its original form (see its NOTICE.md).
+extend-exclude = ["eval/qm_eval/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "ANN", "RUF"]
