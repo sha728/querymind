@@ -10,6 +10,8 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     # Pinned exactly: safety/forbidden.py depends on sqlglot node class names (design §7.2).
     "sqlglot==30.21.0",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
 ]
 
 [project.optional-dependencies]
