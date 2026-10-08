@@ -10,6 +10,7 @@ from pathlib import Path
 
 from sqlglot import exp
 
+from qm_engine.execution.sqlite import connect_ro
 from qm_engine.observability import get_logger
 from qm_engine.schema.models import Column, ForeignKey, SchemaSnapshot, Table
 
@@ -46,15 +47,6 @@ def normalize_sqlite_type(declared: str) -> str:
 
 def _quote(name: str) -> str:
     return exp.to_identifier(name, quoted=True).sql(dialect="sqlite")
-
-
-def _connect_ro(path: Path) -> sqlite3.Connection:
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
-    # Some Spider databases hold bytes that are not valid UTF-8 in TEXT columns.
-    conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
-    return conn
 
 
 def _samples(conn: sqlite3.Connection, table: str, column: str, declared: str) -> tuple[str, ...]:
@@ -95,7 +87,7 @@ def _foreign_keys(
 
 
 def introspect_sqlite(path: Path, *, now: datetime | None = None) -> SchemaSnapshot:
-    conn = _connect_ro(path)
+    conn = connect_ro(path)
     try:
         names = [
             r[0]
