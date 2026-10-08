@@ -37,8 +37,9 @@ class ChatResult:
     text: str
     prompt_tokens: int | None  # None when the provider did not report usage (never estimated)
     completion_tokens: int | None
-    latency_ms: int
+    latency_ms: int  # time inside the HTTP request(s) only (design §11.3)
     model: str
+    pacing_ms: int = 0  # time spent waiting for the free-tier pacing slot (not latency)
 
 
 class LLMError(Exception):
@@ -57,6 +58,14 @@ class LLMClient(Protocol):
     async def chat(
         self, messages: list[Message], *, max_tokens: int | None = None, purpose: str = ""
     ) -> ChatResult: ...
+
+
+@dataclass
+class _CallTimes:
+    """Per-call accumulators, so latency never includes pacing or backoff waits."""
+
+    http_s: float = 0.0
+    pacing_s: float = 0.0
 
 
 class _Retry(Exception):
@@ -116,37 +125,44 @@ class OpenAICompatibleClient:
             body["reasoning_effort"] = self.cfg.llm_reasoning_effort
         return body
 
-    async def _pace(self) -> None:
-        """Keep at least `min_interval_s` between requests (free-tier RPM limits, E11)."""
+    async def _pace(self) -> float:
+        """Keep at least `min_interval_s` between requests (free-tier RPM limits, E11).
+
+        Returns the seconds waited."""
         async with self._pace_lock:
+            waited = 0.0
             if self._last_request_at is not None:
                 wait = self._last_request_at + self.cfg.min_interval_s - self._clock()
                 if wait > 0:
                     await self._sleep(wait)
+                    waited = wait
             self._last_request_at = self._clock()
+            return waited
 
     async def chat(
         self, messages: list[Message], *, max_tokens: int | None = None, purpose: str = ""
     ) -> ChatResult:
         body = self._body(messages, max_tokens or self.cfg.llm_max_tokens)
-        with Timer() as t:
-            try:
-                data = await self._post(body)
-            except _Retry as first:
-                _log.warning(
-                    "llm_retry", purpose=purpose, code=first.error.code, delay_s=first.delay_s
-                )
-                await self._sleep(first.delay_s)
-                try:
-                    data = await self._post(body)
-                except _Retry as second:
-                    raise second.error from None
-        return self._parse(data, t.elapsed_ms, purpose)
-
-    async def _post(self, body: dict[str, object]) -> dict[str, object]:
-        await self._pace()
+        times = _CallTimes()
         try:
-            response = await self._http.post("/chat/completions", json=body)
+            data = await self._post(body, times)
+        except _Retry as first:
+            _log.warning("llm_retry", purpose=purpose, code=first.error.code, delay_s=first.delay_s)
+            await self._sleep(first.delay_s)
+            try:
+                data = await self._post(body, times)
+            except _Retry as second:
+                raise second.error from None
+        return self._parse(
+            data, round(times.http_s * 1000), purpose, pacing_ms=round(times.pacing_s * 1000)
+        )
+
+    async def _post(self, body: dict[str, object], times: _CallTimes) -> dict[str, object]:
+        times.pacing_s += await self._pace()
+        try:
+            with Timer() as t:
+                response = await self._http.post("/chat/completions", json=body)
+            times.http_s += t.elapsed_ms / 1000
         except httpx.TimeoutException as e:
             # Not retried: a second full timeout would exceed the API's engine timeout.
             raise LLMError(
@@ -184,7 +200,9 @@ class OpenAICompatibleClient:
             raise LLMError("LLM_UNAVAILABLE", "LLM returned an unexpected response shape")
         return data
 
-    def _parse(self, data: dict[str, object], latency_ms: int, purpose: str) -> ChatResult:
+    def _parse(
+        self, data: dict[str, object], latency_ms: int, purpose: str, *, pacing_ms: int = 0
+    ) -> ChatResult:
         choices = data.get("choices")
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
         if not isinstance(message, dict):
@@ -218,6 +236,7 @@ class OpenAICompatibleClient:
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
             model=model if isinstance(model, str) else self.cfg.llm_model,
+            pacing_ms=pacing_ms,
         )
         _log.info(
             "llm_call",
@@ -226,5 +245,6 @@ class OpenAICompatibleClient:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
+            pacing_ms=pacing_ms,
         )
         return result

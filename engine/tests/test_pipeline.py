@@ -70,6 +70,7 @@ async def test_success_records_attempt_timings_and_usage() -> None:
         41,
     )
     assert res.timings.generation_ms == 900
+    assert res.timings.pacing_ms == 0
     assert res.timings.total_ms >= 0
     assert res.linking.applied is False
     assert res.few_shot_ids == ()

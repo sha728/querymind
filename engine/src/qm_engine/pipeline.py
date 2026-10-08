@@ -59,7 +59,8 @@ class Timings:
     validation_ms: int = 0
     execution_ms: int = 0
     summary_ms: int = 0
-    total_ms: int = 0
+    pacing_ms: int = 0  # free-tier pacing wait before LLM calls; included in total_ms only
+    total_ms: int = 0  # wall clock of the whole request
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,7 @@ class Pipeline:
                 attempts=attempts,
                 linking=Linking(mode=cfg.linking_mode, applied=False),
                 timings=Timings(
+                    pacing_ms=chat.pacing_ms,
                     generation_ms=generation_ms,
                     validation_ms=validation_ms,
                     execution_ms=execution_ms,

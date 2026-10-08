@@ -278,7 +278,12 @@ def summarize(run_dir: Path, *, ended_at: datetime | None = None) -> dict[str, o
             "n_missing": len(rows) - len(known),
         }
 
-    latencies = [float(r["timings"]["total_ms"]) for r in rows]  # type: ignore[index]
+    # Engine latency per question, excluding free-tier pacing waits (not part of the engine).
+    latencies = [
+        float(r["timings"]["total_ms"] - r["timings"].get("pacing_ms", 0))  # type: ignore[index,union-attr,operator]
+        for r in rows
+    ]
+    pacing = [float(r["timings"].get("pacing_ms", 0)) for r in rows]  # type: ignore[index,union-attr]
     summary = {
         **_ex(rows),
         "by_hardness": {h: _ex([r for r in rows if r["hardness"] == h]) for h in HARDNESS_ORDER},
@@ -286,7 +291,12 @@ def summarize(run_dir: Path, *, ended_at: datetime | None = None) -> dict[str, o
         "status_counts": dict(Counter(str(r["status"]) for r in rows)),
         "prompt_tokens": tokens("prompt_tokens"),
         "completion_tokens": tokens("completion_tokens"),
-        "latency_ms": {"p50": percentile(latencies, 50), "p95": percentile(latencies, 95)},
+        "latency_ms": {
+            "p50": percentile(latencies, 50),
+            "p95": percentile(latencies, 95),
+            "excludes": "free-tier pacing waits",
+        },
+        "pacing_ms_total": sum(pacing),
         "complete": complete,
         "reportable": bool(config["full"] and not config["git_dirty"] and complete),
         "started_at": config["started_at"],

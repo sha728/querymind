@@ -333,12 +333,15 @@ async def test_requests_are_paced_by_min_interval() -> None:
     rec = Recorder(*[httpx.Response(200, json=ok_body(usage=USAGE)) for _ in range(3)])
     c = client(rec, sleeps, clock, llm_min_interval_s=12.0)
 
-    await c.chat(MESSAGES)  # first request: no wait
+    first = await c.chat(MESSAGES)  # first request: no wait
     clock.now += 5.0
-    await c.chat(MESSAGES)  # 5 s later: waits the remaining 7 s
+    second = await c.chat(MESSAGES)  # 5 s later: waits the remaining 7 s
     clock.now += 20.0
-    await c.chat(MESSAGES)  # 20 s later: no wait
+    third = await c.chat(MESSAGES)  # 20 s later: no wait
     assert sleeps.calls == [7.0]
+    assert (first.pacing_ms, second.pacing_ms, third.pacing_ms) == (0, 7000, 0)
+    # Latency is HTTP time only; the 7 s pacing wait is never part of it.
+    assert second.latency_ms < 1000
 
 
 async def test_cerebras_default_interval_is_12_seconds() -> None:
