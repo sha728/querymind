@@ -10,7 +10,15 @@ from fakes import ScriptedLLM
 from qm_engine.config import EngineConfig
 from qm_engine.llm.client import LLMError
 from qm_eval import runner
-from qm_eval.runner import EvalRunner, RunSpec, eval_config, git_info, percentile, read_results
+from qm_eval.runner import (
+    EvalRunner,
+    RunInterrupted,
+    RunSpec,
+    eval_config,
+    git_info,
+    percentile,
+    read_results,
+)
 from qm_eval.spider import subset_hash, write_manifest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "spider_mini"
@@ -142,8 +150,9 @@ async def test_interrupted_run_leaves_valid_lines_and_no_summary(
     llm = ScriptedLLM(REPLIES[0], REPLIES[1], LLMError("LLM_RATE_LIMITED", "quota"))
     r = make_runner(spec, llm, tmp_path)
     run_dir = r.create_run_dir()
-    with pytest.raises(LLMError):
+    with pytest.raises(RunInterrupted) as err:
         await r.run(run_dir)
+    assert err.value.question_id == 2 and err.value.run_dir == run_dir
     lines = (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert [json.loads(line)["question_id"] for line in lines] == [0, 1]

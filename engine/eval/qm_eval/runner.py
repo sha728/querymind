@@ -15,7 +15,7 @@ import os
 import platform
 import subprocess
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from qm_engine.config import EngineConfig
 from qm_engine.execution.sqlite import SqliteExecutor
-from qm_engine.llm.client import LLMClient
+from qm_engine.llm.client import LLMClient, LLMError
 from qm_engine.observability import get_logger
 from qm_engine.pipeline import Pipeline, PipelineResult
 from qm_engine.schema.introspect_sqlite import introspect_sqlite
@@ -43,6 +43,25 @@ from qm_eval.spider import (
 DEFAULT_RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"
 HARDNESS_ORDER = ("easy", "medium", "hard", "extra")
 
+# Rate limits never count as wrong answers (design §10.3): a retry hint up to this many seconds
+# is waited out and the same question re-run; anything else interrupts the run (resumable).
+MAX_WAIT_S = 60.0
+MAX_WAITS_PER_QUESTION = 5
+
+# config.json fields that must be identical for `--resume` to continue a run.
+RESUME_KEYS = (
+    "split",
+    "full",
+    "seed",
+    "question_id_hash",
+    "timeout_ms",
+    "flags",
+    "llm",
+    "git_sha",
+    "git_dirty",
+    "spider_manifest_hash",
+)
+
 _log = get_logger()
 
 
@@ -56,6 +75,20 @@ class RunSpec:
     tag: str
     timeout_ms: int = 30_000  # per query, gold and predicted (design §10.3)
     split: Split = "dev"
+
+
+class RunInterrupted(Exception):
+    """The run stopped on an LLM rate limit or outage; continue later with ``--resume``."""
+
+    def __init__(self, run_dir: Path, question_id: int, error: LLMError) -> None:
+        self.run_dir = run_dir
+        self.question_id = question_id
+        self.error = error
+        super().__init__(f"interrupted at question {question_id}: {error}")
+
+
+class ResumeMismatch(Exception):
+    """The current settings differ from the run being resumed."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +135,7 @@ def build_config_record(
         "seed": spec.seed,
         "n_questions": len(spec.question_ids),
         "question_id_hash": subset_hash(spec.question_ids),
+        "question_ids": list(spec.question_ids),
         "timeout_ms": spec.timeout_ms,
         "flags": {
             "linking_mode": cfg.linking_mode,
@@ -188,6 +222,14 @@ def result_record(
     }
 
 
+def check_resume(original: dict[str, object], current: dict[str, object]) -> None:
+    """Raise ``ResumeMismatch`` naming every field that differs from the original run."""
+    diffs = [k for k in RESUME_KEYS if original.get(k) != current.get(k)]
+    if diffs:
+        details = "; ".join(f"{k}: run={original.get(k)!r}, now={current.get(k)!r}" for k in diffs)
+        raise ResumeMismatch(f"Cannot resume, settings differ ({', '.join(diffs)}). {details}")
+
+
 def _append_line(path: Path, record: dict[str, object]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -266,6 +308,7 @@ class EvalRunner:
         runs_dir: Path = DEFAULT_RUNS_DIR,
         repo_dir: Path | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.spec = spec
         self.cfg = eval_config(base_cfg)
@@ -273,6 +316,7 @@ class EvalRunner:
         self.runs_dir = runs_dir
         self.repo_dir = repo_dir or Path(__file__).resolve().parents[2]
         self._now = now
+        self._sleep = sleep
         self._schemas: dict[str, SchemaSnapshot] = {}
 
     def _schema(self, db_id: str) -> SchemaSnapshot:
@@ -280,15 +324,45 @@ class EvalRunner:
             self._schemas[db_id] = introspect_sqlite(db_path(self.spec.data_root, db_id))
         return self._schemas[db_id]
 
+    def _config_record(self, started: datetime) -> dict[str, object]:
+        return build_config_record(self.spec, self.cfg, git_info(self.repo_dir), started)
+
     def create_run_dir(self) -> Path:
         started = self._now()
         run_dir = self.runs_dir / f"{started.strftime('%Y%m%dT%H%M%SZ')}_{self.spec.tag}"
         run_dir.mkdir(parents=True, exist_ok=False)
-        record = build_config_record(self.spec, self.cfg, git_info(self.repo_dir), started)
         (run_dir / "config.json").write_text(
-            json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="\n"
+            json.dumps(self._config_record(started), indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
         )
         return run_dir
+
+    def check_resumable(self, run_dir: Path) -> None:
+        """Refuse to continue ``run_dir`` unless the current settings match its config.json."""
+        config_path = run_dir / "config.json"
+        if not config_path.is_file():
+            raise ResumeMismatch(f"Not a run directory (no config.json): {run_dir}")
+        original = json.loads(config_path.read_text(encoding="utf-8"))
+        check_resume(original, self._config_record(self._now()))
+
+    async def _run_question(
+        self, pipeline: Pipeline, ex: SpiderExample, run_dir: Path
+    ) -> PipelineResult:
+        """Run one question, waiting out short rate limits (design §10.3)."""
+        waits = 0
+        while True:
+            try:
+                return await pipeline.run(ex.question, self._schema(ex.db_id))
+            except LLMError as e:
+                hint = e.retry_after_s
+                short = e.code == "LLM_RATE_LIMITED" and hint is not None and hint <= MAX_WAIT_S
+                if short and hint is not None and waits < MAX_WAITS_PER_QUESTION:
+                    waits += 1
+                    _log.warning("eval_rate_limited_wait", question_id=ex.question_id, wait_s=hint)
+                    await self._sleep(hint)
+                    continue
+                raise RunInterrupted(run_dir, ex.question_id, e) from e
 
     async def run(self, run_dir: Path | None = None) -> Path:
         """Run every question not yet in results.jsonl, then write summary.json."""
@@ -305,7 +379,7 @@ class EvalRunner:
         for i, ex in enumerate(todo, 1):
             db = db_path(spec.data_root, ex.db_id)
             pipeline = Pipeline(self.cfg, self.llm, SqliteExecutor(db))
-            res = await pipeline.run(ex.question, self._schema(ex.db_id))
+            res = await self._run_question(pipeline, ex, run_dir)
             pred = res.sql if res.status == "success" else None
             score = await asyncio.to_thread(
                 execution_match, db, pred, ex.query, spec.timeout_ms / 1000
