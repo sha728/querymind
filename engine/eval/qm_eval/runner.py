@@ -22,7 +22,7 @@ from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from qm_engine.config import EngineConfig
+from qm_engine.config import EngineConfig, LinkingMode
 from qm_engine.execution.sqlite import SqliteExecutor
 from qm_engine.llm.client import LLMClient, LLMError
 from qm_engine.observability import get_logger
@@ -75,6 +75,17 @@ class RunSpec:
     tag: str
     timeout_ms: int = 30_000  # per query, gold and predicted (design §10.3)
     split: Split = "dev"
+    # Techniques are off unless a `qm-eval` option turns them on (design §6.7 v0.6);
+    # product defaults from .env never leak into an eval run.
+    linking_mode: LinkingMode = "off"
+    few_shot: bool = False
+    self_correction: bool = False
+    max_corrections: int = 2
+
+
+_DEFAULT_TECHNIQUES = RunSpec(
+    data_root=Path(), manifest=Path(), question_ids=(), full=False, seed=None, tag=""
+)
 
 
 class RunInterrupted(Exception):
@@ -111,8 +122,12 @@ def git_info(repo_dir: Path) -> GitInfo:
         return GitInfo(sha=None, dirty=True)
 
 
-def eval_config(base: EngineConfig) -> EngineConfig:
-    """The product pipeline with the eval-only settings of design §6.7."""
+def eval_config(base: EngineConfig, spec: RunSpec | None = None) -> EngineConfig:
+    """The product pipeline with the eval-only settings of design §6.7.
+
+    Technique flags come from the ``RunSpec`` (default: all off), never from ``base``.
+    """
+    spec_techniques = spec or _DEFAULT_TECHNIQUES
     return EngineConfig.model_validate(
         {
             **base.model_dump(),
@@ -121,6 +136,10 @@ def eval_config(base: EngineConfig) -> EngineConfig:
             "unanswerable_enabled": False,
             "summary_enabled": False,
             "include_date": False,
+            "linking_mode": spec_techniques.linking_mode,
+            "few_shot_enabled": spec_techniques.few_shot,
+            "self_correction_enabled": spec_techniques.self_correction,
+            "max_corrections": spec_techniques.max_corrections,
         }
     )
 
@@ -321,7 +340,7 @@ class EvalRunner:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.spec = spec
-        self.cfg = eval_config(base_cfg)
+        self.cfg = eval_config(base_cfg, spec)
         self.llm = llm
         self.runs_dir = runs_dir
         self.repo_dir = repo_dir or Path(__file__).resolve().parents[2]

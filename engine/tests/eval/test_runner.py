@@ -217,3 +217,70 @@ def test_percentile_matches_linear_interpolation() -> None:
     assert percentile([10.0], 95) == 10.0
     assert percentile([1.0, 2.0, 3.0, 4.0], 50) == 2.5
     assert percentile([float(x) for x in range(1, 101)], 95) == pytest.approx(95.05)
+
+
+def test_product_technique_defaults_do_not_leak_into_eval(tmp_path: Path) -> None:
+    """Design §6.7 v0.6: techniques are off unless the RunSpec turns them on."""
+    product = EngineConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        cerebras_api_key="k",
+        linking_mode="auto",
+        few_shot_enabled=True,
+        self_correction_enabled=True,
+        max_corrections=5,
+    )
+    cfg = eval_config(product)
+    assert cfg.linking_mode == "off"
+    assert not cfg.few_shot_enabled and not cfg.self_correction_enabled
+    assert cfg.max_corrections == 2
+
+
+async def test_config_json_records_effective_technique_flags(spec: RunSpec, tmp_path: Path) -> None:
+    product = EngineConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        cerebras_api_key="k",
+        linking_mode="auto",
+        few_shot_enabled=True,
+        self_correction_enabled=True,
+    )
+    r = EvalRunner(
+        spec, product, ScriptedLLM(*REPLIES), runs_dir=tmp_path / "runs", now=lambda: NOW
+    )
+    run_dir = await r.run()
+    flags = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))["flags"]
+    assert (flags["linking_mode"], flags["few_shot_enabled"], flags["self_correction_enabled"]) == (
+        "off",
+        False,
+        False,
+    )
+
+
+def test_run_spec_turns_techniques_on(spec: RunSpec) -> None:
+    from dataclasses import replace
+
+    on = replace(spec, linking_mode="on", few_shot=True, self_correction=True, max_corrections=1)
+    cfg = eval_config(base_cfg(), on)
+    assert (cfg.linking_mode, cfg.few_shot_enabled, cfg.self_correction_enabled) == (
+        "on",
+        True,
+        True,
+    )
+    assert cfg.max_corrections == 1
+
+
+async def test_resume_refuses_changed_technique_flag(spec: RunSpec, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from qm_eval.runner import ResumeMismatch
+
+    first = make_runner(spec, ScriptedLLM(), tmp_path)
+    run_dir = first.create_run_dir()
+    changed = EvalRunner(
+        replace(spec, self_correction=True),
+        base_cfg(),
+        ScriptedLLM(),
+        runs_dir=tmp_path / "runs",
+        now=lambda: NOW,
+    )
+    with pytest.raises(ResumeMismatch, match="flags"):
+        changed.check_resumable(run_dir)

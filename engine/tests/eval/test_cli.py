@@ -132,10 +132,13 @@ def test_resume_refuses_other_git_sha(
     _assert_refused(env, run_dir, capsys, "git_sha")
 
 
-def test_resume_refuses_changed_flag(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+def test_env_technique_defaults_do_not_affect_resume(env: Env) -> None:
+    # Design §6.7 v0.6: .env technique values never reach an eval run, so changing them
+    # neither changes the recorded flags nor blocks --resume. Flag changes made through
+    # RunSpec are refused (see test_runner.test_resume_refuses_changed_technique_flag).
     run_dir = _start_run(env)
-    env.cfg_overrides = {"max_corrections": 1}
-    _assert_refused(env, run_dir, capsys, "flags")
+    env.cfg_overrides = {"max_corrections": 1, "few_shot_enabled": True}
+    assert cli.main(env.args("--subset", "3", "--resume", str(run_dir))) == 0
 
 
 def test_resume_refuses_changed_model_or_provider(
