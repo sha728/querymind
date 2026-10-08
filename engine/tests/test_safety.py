@@ -6,8 +6,10 @@ import yaml
 from sqlglot import exp
 
 from qm_engine.safety.forbidden import (
+    FORBIDDEN_FUNCTIONS,
     FORBIDDEN_STATEMENT_NODE_NAMES,
     FORBIDDEN_STATEMENT_NODES,
+    is_forbidden_function,
     resolve_node_classes,
 )
 from qm_engine.safety.validator import BLOCKING_CODES, MAX_SQL_CHARS, validate
@@ -41,6 +43,7 @@ def test_corpus_is_well_formed() -> None:
     required = {
         "dml", "ddl", "dcl", "copy", "multi_statement", "data_modifying_cte",
         "select_into", "locking", "utility", "sqlite_specific", "allowed",
+        "forbidden_function", "dynamic_sql",
     }  # fmt: skip
     assert required <= {c["category"] for c in CORPUS}
 
@@ -95,3 +98,22 @@ def test_every_forbidden_node_name_resolves_in_pinned_sqlglot() -> None:
 def test_missing_node_name_fails_loudly() -> None:
     with pytest.raises(ImportError, match="NoSuchNode"):
         resolve_node_classes(("Insert", "NoSuchNode"))
+
+
+def test_every_listed_function_has_a_corpus_case() -> None:
+    called = " ".join(c["sql"].lower() for c in UNSAFE if c["category"] == "forbidden_function")
+    missing = [f for f in FORBIDDEN_FUNCTIONS if f"{f}(" not in called]
+    assert not missing
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["pg_sleep", "PG_SLEEP", "pg_catalog.pg_sleep", "dblink_anything", "pg_advisory_unlock_all"],
+)
+def test_is_forbidden_function_variants(name: str) -> None:
+    assert is_forbidden_function(name)
+
+
+@pytest.mark.parametrize("name", ["now", "generate_series", "pg_size_pretty", "sleep", "editor"])
+def test_is_forbidden_function_allows_lookalikes(name: str) -> None:
+    assert not is_forbidden_function(name)

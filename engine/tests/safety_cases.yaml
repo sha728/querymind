@@ -1,7 +1,7 @@
 # Safety validator corpus (design §7.5, R4.5, M4).
 # Each case: id, category, dialect, sql, expected_code.
 # expected_code = null means the query is safe and must PASS (category "allowed").
-# Categories forbidden_function, dynamic_sql and load_extension are added in T8.
+# T8 added: forbidden_function, dynamic_sql, sqlite load_extension, and function-heavy allowed cases.
 
 # --- dml ---
 - {id: dml-01, category: dml, dialect: postgres, sql: "INSERT INTO customers VALUES ('X', 'Y')", expected_code: FORBIDDEN_STATEMENT}
@@ -130,3 +130,95 @@
 - {id: ok-20, category: allowed, dialect: sqlite, sql: "SELECT \"Ship Date\" FROM shipments LIMIT 5 OFFSET 2", expected_code: null}
 - {id: ok-21, category: allowed, dialect: sqlite, sql: "SELECT T1.name FROM singer AS T1 JOIN singer_in_concert AS T2 ON T1.singer_id = T2.singer_id GROUP BY T1.name HAVING count(*) > 1", expected_code: null}
 - {id: ok-22, category: allowed, dialect: sqlite, sql: "select count(*) from singer where country = 'France' and age > 30", expected_code: null}
+
+# --- forbidden_function: one case per function in design §7.3 (T8) ---
+- {id: fn-01, category: forbidden_function, dialect: postgres, sql: "SELECT current_setting('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-02, category: forbidden_function, dialect: postgres, sql: "SELECT cursor_to_xml('c', 1, true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-03, category: forbidden_function, dialect: postgres, sql: "SELECT database_to_xml(true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-04, category: forbidden_function, dialect: sqlite, sql: "SELECT edit('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-05, category: forbidden_function, dialect: sqlite, sql: "SELECT fts3_tokenizer('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-06, category: forbidden_function, dialect: postgres, sql: "SELECT lo_creat('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-07, category: forbidden_function, dialect: postgres, sql: "SELECT lo_create('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-08, category: forbidden_function, dialect: postgres, sql: "SELECT lo_export(1, '/tmp/x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-09, category: forbidden_function, dialect: postgres, sql: "SELECT lo_from_bytea(0, 'x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-10, category: forbidden_function, dialect: postgres, sql: "SELECT lo_get('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-11, category: forbidden_function, dialect: postgres, sql: "SELECT lo_import('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-12, category: forbidden_function, dialect: postgres, sql: "SELECT lo_open(1, 1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-13, category: forbidden_function, dialect: postgres, sql: "SELECT lo_put(1, 0, 'x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-14, category: forbidden_function, dialect: postgres, sql: "SELECT lo_unlink('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-15, category: forbidden_function, dialect: sqlite, sql: "SELECT load_extension('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-16, category: forbidden_function, dialect: postgres, sql: "SELECT pg_cancel_backend('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-17, category: forbidden_function, dialect: postgres, sql: "SELECT pg_ls_dir('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-18, category: forbidden_function, dialect: postgres, sql: "SELECT pg_ls_logdir()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-19, category: forbidden_function, dialect: postgres, sql: "SELECT pg_ls_tmpdir()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-20, category: forbidden_function, dialect: postgres, sql: "SELECT pg_ls_waldir()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-21, category: forbidden_function, dialect: postgres, sql: "SELECT pg_promote()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-22, category: forbidden_function, dialect: postgres, sql: "SELECT pg_read_binary_file('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-23, category: forbidden_function, dialect: postgres, sql: "SELECT pg_read_file('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-24, category: forbidden_function, dialect: postgres, sql: "SELECT pg_reload_conf()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-25, category: forbidden_function, dialect: postgres, sql: "SELECT pg_rotate_logfile()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-26, category: forbidden_function, dialect: postgres, sql: "SELECT pg_sleep(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-27, category: forbidden_function, dialect: postgres, sql: "SELECT pg_sleep_for('1 s')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-28, category: forbidden_function, dialect: postgres, sql: "SELECT pg_sleep_until(now())", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-29, category: forbidden_function, dialect: postgres, sql: "SELECT pg_stat_file('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-30, category: forbidden_function, dialect: postgres, sql: "SELECT pg_switch_wal()", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-31, category: forbidden_function, dialect: postgres, sql: "SELECT pg_terminate_backend('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-32, category: forbidden_function, dialect: postgres, sql: "SELECT query_to_xml('select 1', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-33, category: forbidden_function, dialect: postgres, sql: "SELECT query_to_xml_and_xmlschema('select 1', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-34, category: forbidden_function, dialect: postgres, sql: "SELECT query_to_xmlschema('select 1', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-35, category: forbidden_function, dialect: sqlite, sql: "SELECT readfile('x')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-36, category: forbidden_function, dialect: postgres, sql: "SELECT schema_to_xml('public', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-37, category: forbidden_function, dialect: postgres, sql: "SELECT set_config('role', 'postgres', false)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-38, category: forbidden_function, dialect: postgres, sql: "SELECT table_to_xml('orders', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-39, category: forbidden_function, dialect: sqlite, sql: "SELECT writefile('/tmp/x', 'y')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v01, category: forbidden_function, dialect: postgres, sql: "SELECT dblink('conn', 'select 1')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v02, category: forbidden_function, dialect: postgres, sql: "SELECT dblink_exec('conn', 'drop table orders')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v03, category: forbidden_function, dialect: postgres, sql: "SELECT dblink_connect('host=evil')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v04, category: forbidden_function, dialect: postgres, sql: "SELECT dblink_get_result('conn')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v05, category: forbidden_function, dialect: postgres, sql: "SELECT * FROM dblink('c', 'select 1') AS t(a int)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v06, category: forbidden_function, dialect: postgres, sql: "SELECT pg_advisory_lock(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v07, category: forbidden_function, dialect: postgres, sql: "SELECT pg_advisory_lock_shared(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v08, category: forbidden_function, dialect: postgres, sql: "SELECT pg_advisory_xact_lock(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v09, category: forbidden_function, dialect: postgres, sql: "SELECT pg_try_advisory_lock(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v10, category: forbidden_function, dialect: postgres, sql: "SELECT pg_try_advisory_xact_lock(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v11, category: forbidden_function, dialect: postgres, sql: "SELECT PG_SLEEP(10)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v12, category: forbidden_function, dialect: postgres, sql: "select Pg_Sleep(10)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v13, category: forbidden_function, dialect: postgres, sql: "SELECT pg_catalog.pg_sleep(10)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v14, category: forbidden_function, dialect: postgres, sql: "SELECT PG_CATALOG.PG_READ_FILE('/etc/passwd')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v15, category: forbidden_function, dialect: postgres, sql: "SELECT \"pg_sleep\"(10)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v16, category: forbidden_function, dialect: postgres, sql: "SELECT * FROM pg_ls_dir('.')", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v17, category: forbidden_function, dialect: postgres, sql: "SELECT * FROM orders, LATERAL pg_read_file('/etc/passwd') AS f", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v18, category: forbidden_function, dialect: postgres, sql: "SELECT (SELECT pg_sleep(10))", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v19, category: forbidden_function, dialect: postgres, sql: "SELECT CASE WHEN 1 = 1 THEN pg_sleep(10) END", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v20, category: forbidden_function, dialect: postgres, sql: "SELECT order_id FROM orders WHERE pg_sleep(10) IS NOT NULL", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v21, category: forbidden_function, dialect: postgres, sql: "SELECT count(*) FILTER (WHERE current_setting('is_superuser') = 'on') FROM orders", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v22, category: forbidden_function, dialect: postgres, sql: "WITH x AS (SELECT pg_sleep(10)) SELECT * FROM x", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v23, category: forbidden_function, dialect: postgres, sql: "SELECT 1 UNION SELECT pg_terminate_backend(1)", expected_code: FORBIDDEN_FUNCTION}
+- {id: fn-v24, category: forbidden_function, dialect: postgres, sql: "SELECT 1; SELECT pg_sleep(10)", expected_code: FORBIDDEN_FUNCTION}
+
+# --- dynamic_sql: SQL strings executed from inside a SELECT (T8) ---
+- {id: dyn-01, category: dynamic_sql, dialect: postgres, sql: "SELECT query_to_xml('DELETE FROM orders RETURNING *', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: dyn-02, category: dynamic_sql, dialect: postgres, sql: "select QUERY_TO_XML('drop table orders', true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+- {id: dyn-03, category: dynamic_sql, dialect: postgres, sql: "SELECT * FROM orders WHERE query_to_xml('insert into t values (1)', true, true, '') IS NOT NULL", expected_code: FORBIDDEN_FUNCTION}
+- {id: dyn-04, category: dynamic_sql, dialect: postgres, sql: "SELECT cursor_to_xml('c', 10, true, true, '')", expected_code: FORBIDDEN_FUNCTION}
+
+# --- sqlite load_extension variants (T8) ---
+- {id: loadext-01, category: sqlite_specific, dialect: sqlite, sql: "SELECT load_extension('/tmp/evil.so')", expected_code: FORBIDDEN_FUNCTION}
+- {id: loadext-02, category: sqlite_specific, dialect: sqlite, sql: "select LOAD_EXTENSION('evil')", expected_code: FORBIDDEN_FUNCTION}
+- {id: loadext-03, category: sqlite_specific, dialect: sqlite, sql: "SELECT * FROM singer WHERE load_extension('x') IS NULL", expected_code: FORBIDDEN_FUNCTION}
+
+# --- allowed: functions and lookalike names that must PASS (T8) ---
+- {id: ok-23, category: allowed, dialect: postgres, sql: "SELECT * FROM generate_series(1, 10) AS g", expected_code: null}
+- {id: ok-24, category: allowed, dialect: postgres, sql: "SELECT x, generate_series(1, 3) FROM t", expected_code: null}
+- {id: ok-25, category: allowed, dialect: postgres, sql: "SELECT d::date FROM generate_series('2026-01-01'::date, '2026-12-01'::date, interval '1 month') AS d", expected_code: null}
+- {id: ok-26, category: allowed, dialect: postgres, sql: "SELECT row_number() OVER (ORDER BY order_date), lag(freight) OVER (PARTITION BY customer_id ORDER BY order_date) FROM orders", expected_code: null}
+- {id: ok-27, category: allowed, dialect: postgres, sql: "SELECT sum(freight) OVER (ORDER BY order_date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM orders", expected_code: null}
+- {id: ok-28, category: allowed, dialect: postgres, sql: "SELECT date_trunc('month', order_date), extract(year FROM order_date), age(now(), order_date) FROM orders", expected_code: null}
+- {id: ok-29, category: allowed, dialect: postgres, sql: "SELECT order_id FROM orders WHERE order_date >= current_date - interval '1 month' AND order_date < now()", expected_code: null}
+- {id: ok-30, category: allowed, dialect: postgres, sql: "SELECT to_char(order_date, 'YYYY-MM'), coalesce(region, 'n/a'), lower(company_name), round(avg(freight)::numeric, 2) FROM orders GROUP BY 1, 2, 3", expected_code: null}
+- {id: ok-31, category: allowed, dialect: postgres, sql: "SELECT pg_size_pretty(1024), string_agg(product_name, ', ') FROM products", expected_code: null}
+- {id: ok-32, category: allowed, dialect: postgres, sql: "SELECT sleep_minutes, readfile_count, edit_date, lo_rank, dblink_count FROM shifts", expected_code: null}
+- {id: ok-33, category: allowed, dialect: postgres, sql: "SELECT 'pg_sleep(10)' AS not_a_call", expected_code: null}
+- {id: ok-34, category: allowed, dialect: sqlite, sql: "SELECT date('now', '-1 month'), strftime('%m', order_date), julianday(order_date) FROM orders", expected_code: null}
+- {id: ok-35, category: allowed, dialect: sqlite, sql: "SELECT substr(name, 1, 3), length(name), ifnull(country, 'x'), group_concat(name) FROM singer", expected_code: null}
+- {id: ok-36, category: allowed, dialect: sqlite, sql: "SELECT edit_count FROM revisions", expected_code: null}

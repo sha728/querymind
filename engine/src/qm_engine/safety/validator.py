@@ -13,7 +13,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError, TokenError
 
-from qm_engine.safety.forbidden import FORBIDDEN_STATEMENT_NODES
+from qm_engine.safety.forbidden import FORBIDDEN_STATEMENT_NODES, is_forbidden_function
 from qm_engine.schema.models import Dialect
 
 # sqlglot logs a warning for every statement it falls back to parsing as `Command`.
@@ -60,6 +60,14 @@ def _reject(code: RejectCode, message: str) -> ValidationResult:
     return ValidationResult(rejection=Rejection(code, message))
 
 
+def _function_names(node: exp.Func) -> set[str]:
+    """Every name a function node can go by: its source name for unknown functions, and
+    its canonical and alias names for functions sqlglot models as typed nodes."""
+    if isinstance(node, exp.Anonymous):
+        return {node.name}
+    return {node.sql_name(), *getattr(type(node), "_sql_names", ())}
+
+
 def _is_select_root(node: exp.Expression) -> bool:
     while isinstance(node, exp.Subquery):
         node = node.this
@@ -92,7 +100,15 @@ def validate(sql: str, dialect: Dialect) -> ValidationResult:
                     "only read-only SELECT queries can run.",
                 )
 
-    # V5 (function deny-list) is added in T8.
+    # V5: dangerous functions anywhere, in any statement.
+    for stmt in statements:
+        for node in stmt.find_all(exp.Func):
+            for name in sorted(_function_names(node)):
+                if is_forbidden_function(name):
+                    return _reject(
+                        "FORBIDDEN_FUNCTION",
+                        f"Function '{name.lower()}' is not allowed.",
+                    )
 
     # V6
     if len(statements) > 1:
