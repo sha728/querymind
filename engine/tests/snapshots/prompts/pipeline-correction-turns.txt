@@ -1,0 +1,9 @@
+=== assistant ===
+```sql
+SELECT count(*) FROM singer WHERE countryy = 'France'
+```
+
+=== user ===
+That query failed.
+Error (EXECUTION_ERROR): no such column: countryy
+Fix the query so it answers the original question. Reply with the corrected SQL in a single ```sql code block and nothing else.

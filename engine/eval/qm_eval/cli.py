@@ -81,6 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="similar Spider-train examples in the prompt (design 6.4; default off)",
     )
     run.add_argument(
+        "--self-correction",
+        choices=["off", "on"],
+        default="off",
+        help="retry failed queries with the error (design 6.2 step 9; default off)",
+    )
+    run.add_argument(
+        "--max-corrections",
+        type=int,
+        default=2,
+        metavar="N",
+        help="correction attempts after the first generation (default 2)",
+    )
+    run.add_argument(
         "--linking-top-k",
         type=int,
         default=5,
@@ -113,6 +126,8 @@ def _spec(args: argparse.Namespace) -> RunSpec:
         linking_mode=args.linking,
         linking_top_k=args.linking_top_k,
         few_shot=args.few_shot == "on",
+        self_correction=args.self_correction == "on",
+        max_corrections=args.max_corrections,
     )
 
 
@@ -149,6 +164,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--subset must be a positive integer")
     if args.command == "run" and args.linking_top_k <= 0:
         parser.error("--linking-top-k must be a positive integer")
+    if args.command == "run" and args.max_corrections < 0:
+        parser.error("--max-corrections must be 0 or more")
     configure_logging(target="stderr")  # stdout carries the result
     if args.command == "cost":
         try:

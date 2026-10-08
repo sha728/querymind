@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 import pytest
@@ -222,13 +223,13 @@ async def test_empty_reply_fails_with_empty_sql() -> None:
 async def test_execution_error_fails_without_correction(code: str) -> None:
     llm = ScriptedLLM(GOOD)
     ex = FakeExecutor(ExecutionError(code, "no such column: countryy"))  # type: ignore[arg-type]
-    res = await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+    res = await pipeline(llm, ex, self_correction_enabled=False).run(QUESTION, SQLITE_SCHEMA)
     assert res.status == "failed"
     assert res.sql == "SELECT count(*) FROM singer WHERE country = 'France'"
     assert res.message == "no such column: countryy"
     assert res.attempts[0].error_code == code
     assert res.attempts[0].stage == "execute"
-    assert len(llm.calls) == 1  # no correction before T24
+    assert len(llm.calls) == 1  # correction is off
 
 
 async def test_long_error_is_truncated_in_attempt() -> None:
@@ -266,3 +267,114 @@ async def test_missing_usage_gives_none_totals() -> None:
     assert res.usage is not None
     assert res.usage.prompt_tokens is None
     assert res.usage.completion_tokens is None
+
+
+# --- self-correction (T24, design §6.2 step 9, D7) ---
+
+BAD_COLUMN = "```sql\nSELECT count(*) FROM singer WHERE countryy = 'France'\n```"
+FIXED_SQL = "SELECT count(*) FROM singer WHERE country = 'France'"
+
+
+async def test_execution_error_then_fixed_sql_succeeds_on_attempt_2() -> None:
+    llm = ScriptedLLM(BAD_COLUMN, GOOD, prompt_tokens=100, completion_tokens=20)
+    ex = FakeExecutor(ExecutionError("EXECUTION_ERROR", "no such column: countryy"), result())
+    res = await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+
+    assert res.status == "success"
+    assert res.sql == FIXED_SQL
+    assert [(a.n, a.stage, a.error_code) for a in res.attempts] == [
+        (1, "execute", "EXECUTION_ERROR"),
+        (2, "execute", None),
+    ]
+    assert res.attempts[0].error == "no such column: countryy"
+    assert res.usage is not None and res.usage.prompt_tokens == 200  # summed over attempts
+    # The correction is sent in the same conversation: previous reply + error turn.
+    second = llm.calls[1]
+    assert [m["role"] for m in second] == ["system", "user", "assistant", "user"]
+    assert second[2]["content"] == BAD_COLUMN
+    assert "Error (EXECUTION_ERROR): no such column: countryy" in second[3]["content"]
+
+
+async def test_retryable_validator_rejection_is_corrected() -> None:
+    llm = ScriptedLLM("```sql\nSELECT 1; SELECT 2\n```", GOOD)
+    ex = FakeExecutor(result())
+    res = await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+    assert res.status == "success"
+    assert res.attempts[0].error_code == "MULTIPLE_STATEMENTS"
+    assert res.attempts[0].stage == "validate"
+    assert "Return exactly one statement." in llm.calls[1][3]["content"]
+    assert len(ex.calls) == 1  # the rejected SQL never reached the executor
+
+
+async def test_empty_reply_is_corrected() -> None:
+    llm = ScriptedLLM("   ", GOOD)
+    res = await pipeline(llm, FakeExecutor(result()), self_correction_enabled=True).run(
+        QUESTION, SQLITE_SCHEMA
+    )
+    assert res.status == "success"
+    assert res.attempts[0].error_code == "EMPTY_SQL"
+
+
+async def test_budget_exhausted_after_exactly_three_generations() -> None:
+    llm = ScriptedLLM(BAD_COLUMN, BAD_COLUMN, "```sql\nSELECT FROM WHERE (\n```")
+    ex = FakeExecutor(
+        ExecutionError("EXECUTION_ERROR", "no such column: countryy"),
+        ExecutionError("EXECUTION_ERROR", "no such column: countryy (again)"),
+    )
+    res = await pipeline(llm, ex, self_correction_enabled=True, max_corrections=2).run(
+        QUESTION, SQLITE_SCHEMA
+    )
+    assert len(llm.calls) == 3
+    assert res.status == "failed"
+    assert [a.error_code for a in res.attempts] == [
+        "EXECUTION_ERROR",
+        "EXECUTION_ERROR",
+        "PARSE_ERROR",
+    ]
+    assert res.sql == "SELECT FROM WHERE ("  # the last attempted SQL
+    assert res.message is not None and "could not be parsed" in res.message
+
+
+async def test_max_corrections_zero_means_one_generation() -> None:
+    llm = ScriptedLLM(BAD_COLUMN)
+    ex = FakeExecutor(ExecutionError("EXECUTION_ERROR", "no such column"))
+    res = await pipeline(llm, ex, self_correction_enabled=True, max_corrections=0).run(
+        QUESTION, SQLITE_SCHEMA
+    )
+    assert res.status == "failed" and len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["```sql\nDROP TABLE singer\n```", "```sql\nSELECT load_extension('x')\n```"],
+)
+async def test_blocking_rejection_is_never_retried(reply: str) -> None:
+    llm = ScriptedLLM(reply, GOOD)
+    ex = FakeExecutor(result())
+    res = await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+    assert res.status == "blocked"
+    assert len(llm.calls) == 1 and ex.calls == []
+
+
+async def test_read_only_violation_is_never_retried() -> None:
+    llm = ScriptedLLM(GOOD, GOOD)
+    ex = FakeExecutor(ExecutionError("READ_ONLY_VIOLATION", "readonly database"), result())
+    res = await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+    assert res.status == "blocked" and len(llm.calls) == 1
+
+
+async def test_cannot_answer_is_never_retried() -> None:
+    llm = ScriptedLLM("CANNOT_ANSWER: no salary column", GOOD)
+    res = await pipeline(
+        llm, FakeExecutor(), self_correction_enabled=True, unanswerable_enabled=True
+    ).run(QUESTION, SQLITE_SCHEMA)
+    assert res.status == "cannot_answer" and len(llm.calls) == 1
+
+
+async def test_correction_turn_matches_snapshot(snapshot: Callable[[str, str], None]) -> None:
+    llm = ScriptedLLM(BAD_COLUMN, GOOD)
+    ex = FakeExecutor(ExecutionError("EXECUTION_ERROR", "no such column: countryy"), result())
+    await pipeline(llm, ex, self_correction_enabled=True).run(QUESTION, SQLITE_SCHEMA)
+    turns = llm.calls[1][2:]
+    rendered = "\n\n".join(f"=== {m['role']} ===\n{m['content']}" for m in turns) + "\n"
+    snapshot("prompts/pipeline-correction-turns.txt", rendered)

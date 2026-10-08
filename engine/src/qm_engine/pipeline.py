@@ -1,9 +1,8 @@
 """The single orchestration path shared by the product and the evaluation harness (design §6).
 
-T13 implements the zero-shot path: steps 1, 4-8 and 12 of design §6.2; T22 adds schema
-linking (step 2) and T23 few-shot selection (step 3). Self-correction (step 9, T24), charts
-(step 10, T30) and summaries (step 11, T31) are added by later tasks. Until T24, a failed
-attempt ends the request even when ``self_correction_enabled`` is set.
+Steps 1-9 and 12 of design §6.2: input checks, schema linking (T22), few-shot selection (T23),
+prompt, generation, extraction, validation, execution and self-correction (T24). Charts
+(step 10, T30) and summaries (step 11, T31) are added by later tasks.
 
 LLM transport errors (``LLMError``) are not turned into a status: they propagate so the API can
 return 503 and the harness can apply its rate-limit rules (design §10.3, §12).
@@ -22,9 +21,9 @@ from qm_engine.linking import SchemaLinker
 from qm_engine.llm.client import ChatResult, LLMClient
 from qm_engine.llm.embeddings import Embedder
 from qm_engine.observability import Timer, get_logger
-from qm_engine.prompts import Example, build_messages
+from qm_engine.prompts import Example, build_messages, correction_turns
 from qm_engine.safety.validator import validate
-from qm_engine.schema.models import SchemaSnapshot
+from qm_engine.schema.models import Dialect, SchemaSnapshot
 from qm_engine.schema.serialize import serialize_schema
 
 MAX_QUESTION_CHARS = 1000
@@ -99,6 +98,21 @@ class PipelineResult:
         return len(self.rows)
 
 
+@dataclass(frozen=True)
+class _Outcome:
+    """How one model reply ended (steps 6-8)."""
+
+    kind: Literal["success", "retryable", "blocked", "cannot_answer"]
+    sql: str | None
+    stage: Stage
+    message: str | None
+    error_code: str | None = None
+    error: str | None = None
+    exec_result: ExecResult | None = None
+    validation_ms: int = 0
+    execution_ms: int = 0
+
+
 def _sum_tokens(values: list[int | None]) -> int | None:
     known = [v for v in values if v is not None]
     return sum(known) if known else None
@@ -154,7 +168,6 @@ class Pipeline:
         # Step 2: schema linking (design §6.3).
         with Timer() as t_link:
             linking = await self.linker.link(question, schema)
-        linking_ms = t_link.elapsed_ms
 
         # Step 3: few-shot examples by similarity (design §6.4).
         examples: Sequence[Example] = ()
@@ -163,7 +176,6 @@ class Pipeline:
                 if self.fewshot is None:
                     raise ValueError("few-shot is enabled but no example pool was given")
                 examples = await self.fewshot.select(question, cfg.few_shot_k)
-        fewshot_ms = t_fewshot.elapsed_ms
 
         # Step 4: prompt with the linked (or full) schema and the examples.
         messages = build_messages(
@@ -175,33 +187,20 @@ class Pipeline:
             today=self._today() if cfg.include_date else None,
         )
 
-        generation_ms = validation_ms = execution_ms = 0
-
-        # Step 5: generate.
-        chat: ChatResult = await self.llm.chat(messages, purpose="generation")
-        generation_ms += chat.latency_ms
+        # Steps 5-9: generate, extract, validate, execute; on a retryable failure append the
+        # correction turns (design §8.2) and try again, up to max_corrections times.
+        max_generations = 1 + (cfg.max_corrections if cfg.self_correction_enabled else 0)
+        attempts: list[Attempt] = []
+        totals = {"generation": 0, "validation": 0, "execution": 0, "pacing": 0}
+        model = cfg.llm_model
 
         def finish(
             status: Status,
             *,
             sql: str | None,
-            stage: Stage,
             message: str | None,
-            error_code: str | None = None,
-            error: str | None = None,
             exec_result: ExecResult | None = None,
         ) -> PipelineResult:
-            attempt = Attempt(
-                n=1,
-                sql=sql,
-                stage=stage,
-                error_code=error_code,
-                error=error[:MAX_STORED_ERROR_CHARS] if error else None,
-                latency_ms=chat.latency_ms + validation_ms + execution_ms,
-                prompt_tokens=chat.prompt_tokens,
-                completion_tokens=chat.completion_tokens,
-            )
-            attempts = (attempt,)
             return PipelineResult(
                 status=status,
                 sql=sql,
@@ -209,28 +208,76 @@ class Pipeline:
                 columns=exec_result.columns if exec_result else (),
                 rows=exec_result.rows if exec_result else [],
                 truncated=exec_result.truncated if exec_result else False,
-                attempts=attempts,
+                attempts=tuple(attempts),
                 linking=Linking(mode=linking.mode, applied=linking.applied, tables=linking.tables),
                 few_shot_ids=tuple(e.id for e in examples),
                 timings=Timings(
-                    linking_ms=linking_ms,
-                    fewshot_ms=fewshot_ms,
-                    pacing_ms=chat.pacing_ms,
-                    generation_ms=generation_ms,
-                    validation_ms=validation_ms,
-                    execution_ms=execution_ms,
+                    linking_ms=t_link.elapsed_ms,
+                    fewshot_ms=t_fewshot.elapsed_ms,
+                    pacing_ms=totals["pacing"],
+                    generation_ms=totals["generation"],
+                    validation_ms=totals["validation"],
+                    execution_ms=totals["execution"],
                 ),
                 usage=Usage(
-                    model=chat.model,
+                    model=model,
                     prompt_tokens=_sum_tokens([a.prompt_tokens for a in attempts]),
                     completion_tokens=_sum_tokens([a.completion_tokens for a in attempts]),
                 ),
             )
 
+        for n in range(1, max_generations + 1):
+            chat: ChatResult = await self.llm.chat(
+                messages, purpose="generation" if n == 1 else "correction"
+            )
+            model = chat.model
+            totals["generation"] += chat.latency_ms
+            totals["pacing"] += chat.pacing_ms
+            outcome = await self._attempt(chat.text, dialect)
+            totals["validation"] += outcome.validation_ms
+            totals["execution"] += outcome.execution_ms
+            attempts.append(
+                Attempt(
+                    n=n,
+                    sql=outcome.sql,
+                    stage=outcome.stage,
+                    error_code=outcome.error_code,
+                    error=outcome.error[:MAX_STORED_ERROR_CHARS] if outcome.error else None,
+                    latency_ms=chat.latency_ms + outcome.validation_ms + outcome.execution_ms,
+                    prompt_tokens=chat.prompt_tokens,
+                    completion_tokens=chat.completion_tokens,
+                )
+            )
+
+            if outcome.kind == "success":
+                # Steps 10-12: charts (T30) and summary (T31) are added later.
+                return finish(
+                    "success", sql=outcome.sql, message=None, exec_result=outcome.exec_result
+                )
+            if outcome.kind == "cannot_answer":
+                return finish("cannot_answer", sql=None, message=outcome.message)
+            if outcome.kind == "blocked":
+                return finish("blocked", sql=outcome.sql, message=outcome.message)
+
+            # Retryable failure (design D7): correct within the same conversation, if allowed.
+            if n < max_generations:
+                _log.info("correction_attempt", n=n + 1, error_code=outcome.error_code)
+                messages = messages + correction_turns(
+                    chat.text, outcome.error_code or "ERROR", outcome.error or ""
+                )
+                continue
+            return finish("failed", sql=outcome.sql, message=outcome.message)
+
+        raise AssertionError("unreachable: the loop always returns")  # pragma: no cover
+
+    async def _attempt(self, reply: str, dialect: Dialect) -> _Outcome:
+        """Steps 6-8 for one model reply."""
+        cfg = self.cfg
+
         # Step 6: extract.
-        extraction = extract(chat.text, unanswerable_enabled=cfg.unanswerable_enabled)
+        extraction = extract(reply, unanswerable_enabled=cfg.unanswerable_enabled)
         if extraction.kind == "cannot_answer":
-            return finish(
+            return _Outcome(
                 "cannot_answer",
                 sql=None,
                 stage="extract",
@@ -238,20 +285,24 @@ class Pipeline:
             )
         if extraction.kind == "empty":
             msg = "The reply contained no SQL query."
-            return finish(
-                "failed", sql=None, stage="extract", message=msg, error_code="EMPTY_SQL", error=msg
+            return _Outcome(
+                "retryable",
+                sql=None,
+                stage="extract",
+                message=msg,
+                error_code="EMPTY_SQL",
+                error=msg,
             )
         sql = extraction.sql
 
         # Step 7: validate (before any database contact).
-        with Timer() as t:
+        with Timer() as t_val:
             verdict = validate(sql, dialect)
-        validation_ms += t.elapsed_ms
         if verdict.rejection is not None:
             r = verdict.rejection
             if r.blocking:
                 _log.warning("sql_blocked", code=r.code)
-                return finish(
+                return _Outcome(
                     "blocked",
                     sql=sql,
                     stage="validate",
@@ -259,51 +310,60 @@ class Pipeline:
                     f"({r.code}: {r.message})",
                     error_code=r.code,
                     error=r.message,
+                    validation_ms=t_val.elapsed_ms,
                 )
             _log.info("sql_rejected", code=r.code)
-            # Step 9 (self-correction) arrives in T24; until then the request ends here.
-            return finish(
-                "failed",
+            return _Outcome(
+                "retryable",
                 sql=sql,
                 stage="validate",
                 message=r.message,
                 error_code=r.code,
                 error=r.message,
+                validation_ms=t_val.elapsed_ms,
             )
 
         # Step 8: execute.
         try:
-            with Timer() as t:
+            with Timer() as t_exec:
                 exec_result = await self.executor.execute(
                     sql, cfg.row_limit, cfg.statement_timeout_ms
                 )
         except ExecutionError as e:
-            execution_ms += t.elapsed_ms
             if not e.retryable:
                 _log.error("read_only_violation", code=e.code)
-                return finish(
+                return _Outcome(
                     "blocked",
                     sql=sql,
                     stage="execute",
                     message=f"The generated query was blocked by the database ({e.code}).",
                     error_code=e.code,
                     error=e.message,
+                    validation_ms=t_val.elapsed_ms,
+                    execution_ms=t_exec.elapsed_ms,
                 )
-            return finish(
-                "failed",
+            return _Outcome(
+                "retryable",
                 sql=sql,
                 stage="execute",
                 message=e.message,
                 error_code=e.code,
                 error=e.message,
+                validation_ms=t_val.elapsed_ms,
+                execution_ms=t_exec.elapsed_ms,
             )
-        execution_ms += t.elapsed_ms
         _log.info(
             "sql_executed",
             row_count=exec_result.row_count,
             truncated=exec_result.truncated,
-            latency_ms=t.elapsed_ms,
+            latency_ms=t_exec.elapsed_ms,
         )
-
-        # Step 12: return (charts T30, summary T31).
-        return finish("success", sql=sql, stage="execute", message=None, exec_result=exec_result)
+        return _Outcome(
+            "success",
+            sql=sql,
+            stage="execute",
+            message=None,
+            exec_result=exec_result,
+            validation_ms=t_val.elapsed_ms,
+            execution_ms=t_exec.elapsed_ms,
+        )

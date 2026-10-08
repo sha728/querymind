@@ -415,6 +415,15 @@ def summarize(run_dir: Path, *, ended_at: datetime | None = None) -> dict[str, o
         "prompt_tokens": tokens("prompt_tokens"),
         "completion_tokens": tokens("completion_tokens"),
         "linking": _linking_stats(rows),
+        "attempts": {
+            str(k): v
+            for k, v in sorted(Counter(int(r["n_attempts"]) for r in rows).items())  # type: ignore[call-overload]
+        },
+        "n_corrected_to_success": sum(
+            1
+            for r in rows
+            if r["status"] == "success" and int(r["n_attempts"]) > 1  # type: ignore[call-overload]
+        ),
         "latency_ms": {
             "p50": percentile(latencies, 50),
             "p95": percentile(latencies, 95),

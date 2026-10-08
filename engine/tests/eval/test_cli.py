@@ -332,3 +332,47 @@ def test_few_shot_env_default_does_not_apply(env: Env) -> None:
 def test_resume_refuses_changed_few_shot(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     run_dir = _start_run(env)
     _assert_refused(env, run_dir, capsys, "flags", "--few-shot", "on")
+
+
+# --- self-correction (T24) ---
+
+BAD = "```sql\nSELECT no_such_column FROM customers\n```"
+
+
+def test_self_correction_on_recovers_and_is_recorded(env: Env) -> None:
+    env.llm = ScriptedLLM(BAD, REPLY, REPLY, REPLY)
+    args = env.args("--subset", "3", "--self-correction", "on", "--max-corrections", "1")
+    assert cli.main(args) == 0
+    run_dir = env.run_dir()
+    flags = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))["flags"]
+    assert (flags["self_correction_enabled"], flags["max_corrections"]) == (True, 1)
+    rows = read_results(run_dir / "results.jsonl")
+    assert [r["n_attempts"] for r in rows] == [2, 1, 1]
+    assert rows[0]["status"] == "success"
+    assert rows[0]["attempts"][0]["error_code"] == "EXECUTION_ERROR"
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["attempts"] == {"1": 2, "2": 1}
+    assert summary["n_corrected_to_success"] == 1
+
+
+def test_self_correction_env_default_does_not_apply(env: Env) -> None:
+    env.cfg_overrides = {"self_correction_enabled": True, "max_corrections": 2}
+    env.llm = ScriptedLLM(BAD, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3")) == 0
+    flags = json.loads((env.run_dir() / "config.json").read_text(encoding="utf-8"))["flags"]
+    assert flags["self_correction_enabled"] is False
+    rows = read_results(env.run_dir() / "results.jsonl")
+    assert rows[0]["status"] == "failed" and rows[0]["n_attempts"] == 1  # no retry
+
+
+def test_resume_refuses_changed_self_correction(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = _start_run(env)
+    _assert_refused(env, run_dir, capsys, "flags", "--self-correction", "on")
+
+
+def test_negative_max_corrections_is_a_usage_error(env: Env) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(env.args("--subset", "3", "--max-corrections", "-1"))
+    assert exit_info.value.code == 2
