@@ -1,0 +1,27 @@
+[
+  {
+    "db_id": "mini",
+    "question": "How many customers are there?",
+    "query": "SELECT count(*) FROM customers"
+  },
+  {
+    "db_id": "mini",
+    "question": "List the names of all products ordered by price descending.",
+    "query": "SELECT name FROM products ORDER BY price DESC"
+  },
+  {
+    "db_id": "mini",
+    "question": "What is the total order amount per customer?",
+    "query": "SELECT customer_id, sum(amount) FROM orders GROUP BY customer_id"
+  },
+  {
+    "db_id": "mini",
+    "question": "Which products are discontinued?",
+    "query": "SELECT name FROM products WHERE discontinued = 1"
+  },
+  {
+    "db_id": "mini",
+    "question": "How many items were ordered in order 10248?",
+    "query": "SELECT sum(quantity) FROM order_items WHERE order_id = 10248"
+  }
+]

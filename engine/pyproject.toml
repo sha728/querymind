@@ -25,11 +25,11 @@ dev = [
 ]
 
 [project.scripts]
-# qm_eval (engine/eval/qm_eval) is added to the wheel when its CLI exists (T17).
+# The CLI module (qm_eval.cli) is added in T17.
 qm-eval = "qm_eval.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/qm_engine"]
+packages = ["src/qm_engine", "eval/qm_eval"]
 
 [tool.ruff]
 target-version = "py311"

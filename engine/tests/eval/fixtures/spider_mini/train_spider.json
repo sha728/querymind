@@ -1,0 +1,12 @@
+[
+  {
+    "db_id": "mini",
+    "question": "How many orders are there?",
+    "query": "SELECT count(*) FROM orders"
+  },
+  {
+    "db_id": "mini",
+    "question": "List all customer ids.",
+    "query": "SELECT customer_id FROM customers"
+  }
+]
