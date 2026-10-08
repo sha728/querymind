@@ -54,6 +54,10 @@ class Sleeps:
 
 
 def make_cfg(**kwargs: object) -> EngineConfig:
+    """Test config: no .env, dummy keys, and no pacing unless a test asks for it."""
+    kwargs.setdefault("cerebras_api_key", "csk-test")
+    kwargs.setdefault("groq_api_key", "gsk-test")
+    kwargs.setdefault("llm_min_interval_s", 0.0)
     return EngineConfig(_env_file=None, **kwargs)  # type: ignore[arg-type]
 
 
@@ -67,18 +71,39 @@ def logs(capsys: pytest.CaptureFixture[str]) -> Iterator[Callable[[], list[dict]
     yield read
 
 
-def client(rec: Recorder, sleeps: Sleeps | None = None, **cfg: object) -> OpenAICompatibleClient:
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def client(
+    rec: Recorder,
+    sleeps: Sleeps | None = None,
+    clock: FakeClock | None = None,
+    **cfg: object,
+) -> OpenAICompatibleClient:
     return OpenAICompatibleClient(
-        make_cfg(**cfg), transport=httpx.MockTransport(rec), sleep=sleeps or Sleeps()
+        make_cfg(**cfg),
+        transport=httpx.MockTransport(rec),
+        sleep=sleeps or Sleeps(),
+        clock=clock or FakeClock(),
     )
 
 
 # --- request shape ---
 
 
-async def test_ollama_request_shape() -> None:
+async def test_ollama_request_shape_has_no_num_ctx_option() -> None:
     rec = Recorder(httpx.Response(200, json=ok_body(usage=USAGE)))
-    c = client(rec, llm_base_url="http://localhost:11434/v1/", llm_num_ctx=8192)
+    c = client(
+        rec,
+        llm_provider="ollama",
+        llm_model="qwen2.5-coder:7b",
+        ollama_base_url="http://localhost:11434/v1/",
+    )
     await c.chat(MESSAGES, max_tokens=256)
 
     (req,) = rec.requests
@@ -91,17 +116,33 @@ async def test_ollama_request_shape() -> None:
     assert body["temperature"] == 0
     assert body["max_tokens"] == 256
     assert body["stream"] is False
-    assert body["options"] == {"num_ctx": 8192}
+    assert "options" not in body  # ignored by Ollama's OpenAI endpoint (T11, design E10)
+    assert "reasoning_effort" not in body
 
 
-async def test_groq_request_has_key_and_no_num_ctx() -> None:
+async def test_cerebras_request_shape() -> None:
+    rec = Recorder(httpx.Response(200, json=ok_body(usage=USAGE)))
+    await client(rec, cerebras_api_key="csk-abc").chat(MESSAGES)
+
+    (req,) = rec.requests
+    assert str(req.url) == "https://api.cerebras.ai/v1/chat/completions"
+    assert req.headers["authorization"] == "Bearer csk-abc"
+    body = rec.bodies()[0]
+    assert body["model"] == "gpt-oss-120b"
+    assert body["reasoning_effort"] == "low"
+    assert body["max_tokens"] == 4096  # config default leaves room for reasoning
+    assert body["temperature"] == 0
+    assert "options" not in body
+
+
+async def test_groq_request_has_key() -> None:
     rec = Recorder(httpx.Response(200, json=ok_body(usage=USAGE)))
     c = client(
         rec,
         llm_provider="groq",
-        llm_api_key="gsk-test",
-        llm_base_url="https://api.groq.com/openai/v1",
         llm_model="openai/gpt-oss-120b",
+        llm_reasoning_effort="medium",
+        llm_max_tokens=2048,
     )
     await c.chat(MESSAGES)
 
@@ -111,7 +152,8 @@ async def test_groq_request_has_key_and_no_num_ctx() -> None:
     body = rec.bodies()[0]
     assert "options" not in body
     assert body["model"] == "openai/gpt-oss-120b"
-    assert body["max_tokens"] == 512  # default
+    assert body["max_tokens"] == 2048
+    assert body["reasoning_effort"] == "medium"
     assert body["temperature"] == 0
 
 
@@ -140,7 +182,7 @@ async def test_missing_usage_gives_none_and_logs(logs: Callable[[], list[dict]])
 
 async def test_llm_call_logged_without_api_key(logs: Callable[[], list[dict]]) -> None:
     rec = Recorder(httpx.Response(200, json=ok_body(usage=USAGE)))
-    await client(rec, llm_provider="groq", llm_api_key="gsk-secret").chat(MESSAGES)
+    await client(rec, llm_provider="groq", groq_api_key="gsk-secret").chat(MESSAGES)
     lines = logs()
     call = next(line for line in lines if line["event"] == "llm_call")
     assert call["prompt_tokens"] == 120
@@ -259,20 +301,65 @@ async def test_client_errors_fail_without_retry(status: int) -> None:
 async def test_warns_when_prompt_nears_num_ctx(logs: Callable[[], list[dict]]) -> None:
     usage = {"prompt_tokens": 7400, "completion_tokens": 10}  # > 0.9 * 8192 = 7372.8
     rec = Recorder(httpx.Response(200, json=ok_body(usage=usage)))
-    await client(rec, llm_num_ctx=8192).chat(MESSAGES)
+    await client(rec, llm_provider="ollama", llm_num_ctx=8192).chat(MESSAGES)
     warn = [line for line in logs() if line["event"] == "prompt_near_context_limit"]
     assert len(warn) == 1
     assert warn[0]["level"] == "warning"
     assert warn[0]["prompt_tokens"] == 7400
 
 
-async def test_no_warning_below_threshold_or_for_groq(logs: Callable[[], list[dict]]) -> None:
+async def test_no_warning_below_threshold_or_for_hosted(logs: Callable[[], list[dict]]) -> None:
     below = {"prompt_tokens": 7000, "completion_tokens": 10}
     big = {"prompt_tokens": 9000, "completion_tokens": 10}
-    await client(Recorder(httpx.Response(200, json=ok_body(usage=below)))).chat(MESSAGES)
     await client(
-        Recorder(httpx.Response(200, json=ok_body(usage=big))),
-        llm_provider="groq",
-        llm_api_key="k",
+        Recorder(httpx.Response(200, json=ok_body(usage=below))), llm_provider="ollama"
     ).chat(MESSAGES)
+    await client(Recorder(httpx.Response(200, json=ok_body(usage=big)))).chat(MESSAGES)
     assert not [line for line in logs() if line["event"] == "prompt_near_context_limit"]
+
+
+# --- reasoning field, pacing, retry hint (design E11) ---
+
+
+async def test_reasoning_field_is_ignored() -> None:
+    body = ok_body("SELECT 1", usage=USAGE)
+    body["choices"][0]["message"]["reasoning"] = "Let me think: SELECT 2 would be wrong."
+    result = await client(Recorder(httpx.Response(200, json=body))).chat(MESSAGES)
+    assert result.text == "SELECT 1"
+
+
+async def test_requests_are_paced_by_min_interval() -> None:
+    sleeps, clock = Sleeps(), FakeClock()
+    rec = Recorder(*[httpx.Response(200, json=ok_body(usage=USAGE)) for _ in range(3)])
+    c = client(rec, sleeps, clock, llm_min_interval_s=12.0)
+
+    await c.chat(MESSAGES)  # first request: no wait
+    clock.now += 5.0
+    await c.chat(MESSAGES)  # 5 s later: waits the remaining 7 s
+    clock.now += 20.0
+    await c.chat(MESSAGES)  # 20 s later: no wait
+    assert sleeps.calls == [7.0]
+
+
+async def test_cerebras_default_interval_is_12_seconds() -> None:
+    sleeps, clock = Sleeps(), FakeClock()
+    rec = Recorder(*[httpx.Response(200, json=ok_body(usage=USAGE)) for _ in range(2)])
+    c = client(rec, sleeps, clock, llm_min_interval_s=None)
+    await c.chat(MESSAGES)
+    await c.chat(MESSAGES)
+    assert sleeps.calls == [12.0]
+
+
+async def test_long_rate_limit_error_carries_retry_hint() -> None:
+    rec = Recorder(httpx.Response(429, headers={"Retry-After": "3600"}))
+    with pytest.raises(LLMError) as err:
+        await client(rec).chat(MESSAGES)
+    assert err.value.code == "LLM_RATE_LIMITED"
+    assert err.value.retry_after_s == 3600.0
+
+
+async def test_rate_limit_without_hint_has_none() -> None:
+    rec = Recorder(httpx.Response(429), httpx.Response(429))
+    with pytest.raises(LLMError) as err:
+        await client(rec).chat(MESSAGES)
+    assert err.value.retry_after_s is None

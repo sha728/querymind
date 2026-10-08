@@ -1,12 +1,14 @@
-"""OpenAI-compatible chat client used for every LLM call (design D1, §6.1, R2.5, R10.5).
+"""OpenAI-compatible chat client used for every LLM call (design D1, E11, §6.1, R2.5, R10.5).
 
-One implementation serves Ollama (local) and Groq (hosted): provider, base URL, model and key
-come from ``EngineConfig``. Requests go straight to ``{base_url}/chat/completions`` with
-``httpx`` so retries and error mapping are explicit (design §12).
+One implementation serves Cerebras and Groq (hosted) and Ollama (local): provider, base URL,
+model and key come from ``EngineConfig``. Requests go straight to
+``{base_url}/chat/completions`` with ``httpx`` so pacing, retries and error mapping are
+explicit (design §12).
 """
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
@@ -16,10 +18,9 @@ import httpx
 from qm_engine.config import EngineConfig
 from qm_engine.observability import Timer, get_logger
 
-DEFAULT_MAX_TOKENS = 512
 MAX_RETRY_AFTER_S = 5.0  # honour Retry-After only up to this (design §12)
 DEFAULT_RETRY_DELAY_S = 1.0
-CONTEXT_WARN_RATIO = 0.9  # warn when a prompt nears Ollama's num_ctx (design §14.2)
+CONTEXT_WARN_RATIO = 0.9  # warn when a prompt nears Ollama's context window (design §14.2)
 
 LLMErrorCode = Literal["LLM_UNAVAILABLE", "LLM_RATE_LIMITED"]
 
@@ -41,15 +42,20 @@ class ChatResult:
 
 
 class LLMError(Exception):
-    def __init__(self, code: LLMErrorCode, message: str) -> None:
+    def __init__(
+        self, code: LLMErrorCode, message: str, *, retry_after_s: float | None = None
+    ) -> None:
         self.code: LLMErrorCode = code
         self.message = message
+        # Provider's retry hint, when known. The harness uses it to wait out short limits
+        # and to stop (resumably) on hourly/daily quotas (design §10.3).
+        self.retry_after_s = retry_after_s
         super().__init__(f"{code}: {message}")
 
 
 class LLMClient(Protocol):
     async def chat(
-        self, messages: list[Message], *, max_tokens: int = DEFAULT_MAX_TOKENS, purpose: str = ""
+        self, messages: list[Message], *, max_tokens: int | None = None, purpose: str = ""
     ) -> ChatResult: ...
 
 
@@ -77,14 +83,18 @@ class OpenAICompatibleClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
         self._sleep = sleep
+        self._clock = clock
+        self._last_request_at: float | None = None
+        self._pace_lock = asyncio.Lock()
         headers = {"Content-Type": "application/json"}
-        if cfg.llm_api_key is not None:
-            headers["Authorization"] = f"Bearer {cfg.llm_api_key.get_secret_value()}"
+        if cfg.api_key is not None:
+            headers["Authorization"] = f"Bearer {cfg.api_key.get_secret_value()}"
         self._http = httpx.AsyncClient(
-            base_url=cfg.llm_base_url.rstrip("/"),
+            base_url=cfg.base_url.rstrip("/"),
             headers=headers,
             timeout=cfg.llm_timeout_s,
             transport=transport,
@@ -101,14 +111,24 @@ class OpenAICompatibleClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        if self.cfg.llm_provider == "ollama":
-            body["options"] = {"num_ctx": self.cfg.llm_num_ctx}
+        # Never `options.num_ctx`: Ollama's OpenAI-compatible endpoint ignores it (T11, E10).
+        if self.cfg.llm_provider != "ollama":
+            body["reasoning_effort"] = self.cfg.llm_reasoning_effort
         return body
 
+    async def _pace(self) -> None:
+        """Keep at least `min_interval_s` between requests (free-tier RPM limits, E11)."""
+        async with self._pace_lock:
+            if self._last_request_at is not None:
+                wait = self._last_request_at + self.cfg.min_interval_s - self._clock()
+                if wait > 0:
+                    await self._sleep(wait)
+            self._last_request_at = self._clock()
+
     async def chat(
-        self, messages: list[Message], *, max_tokens: int = DEFAULT_MAX_TOKENS, purpose: str = ""
+        self, messages: list[Message], *, max_tokens: int | None = None, purpose: str = ""
     ) -> ChatResult:
-        body = self._body(messages, max_tokens)
+        body = self._body(messages, max_tokens or self.cfg.llm_max_tokens)
         with Timer() as t:
             try:
                 data = await self._post(body)
@@ -124,6 +144,7 @@ class OpenAICompatibleClient:
         return self._parse(data, t.elapsed_ms, purpose)
 
     async def _post(self, body: dict[str, object]) -> dict[str, object]:
+        await self._pace()
         try:
             response = await self._http.post("/chat/completions", json=body)
         except httpx.TimeoutException as e:
@@ -138,9 +159,11 @@ class OpenAICompatibleClient:
 
         status = response.status_code
         if status == 429:
-            error = LLMError("LLM_RATE_LIMITED", "LLM provider rate limit reached")
-            delay = _retry_after_seconds(response)
-            delay = DEFAULT_RETRY_DELAY_S if delay is None else delay
+            hint = _retry_after_seconds(response)
+            error = LLMError(
+                "LLM_RATE_LIMITED", "LLM provider rate limit reached", retry_after_s=hint
+            )
+            delay = DEFAULT_RETRY_DELAY_S if hint is None else hint
             if delay > MAX_RETRY_AFTER_S:
                 raise error
             raise _Retry(delay, error)

@@ -7,7 +7,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Dialect = Literal["postgres", "sqlite"]
 LinkingMode = Literal["auto", "on", "off"]
-LLMProvider = Literal["ollama", "groq"]
+LLMProvider = Literal["cerebras", "groq", "ollama"]
+ReasoningEffort = Literal["low", "medium", "high"]
+
+# Default base URL per hosted provider (design E11). Ollama uses `ollama_base_url`.
+PROVIDER_BASE_URLS: dict[str, str] = {
+    "cerebras": "https://api.cerebras.ai/v1",
+    "groq": "https://api.groq.com/openai/v1",
+}
+# Default minimum seconds between requests, from free-tier requests/minute (design E11).
+PROVIDER_MIN_INTERVAL_S: dict[str, float] = {"cerebras": 12.0, "groq": 2.0, "ollama": 0.0}
 
 
 class EngineConfig(BaseSettings):
@@ -49,13 +58,18 @@ class EngineConfig(BaseSettings):
     summary_enabled: bool = True
     include_date: bool = True
 
-    # --- LLM, OpenAI-compatible (design §14.2, D1) ---
-    llm_provider: LLMProvider = "ollama"
-    llm_base_url: str = "http://host.docker.internal:11434/v1"
-    llm_model: str = "qwen2.5-coder:7b"
-    llm_api_key: SecretStr | None = None
-    llm_num_ctx: int = Field(default=8192, gt=0)
+    # --- LLM, OpenAI-compatible (design D1, E11, §14.2) ---
+    llm_provider: LLMProvider = "cerebras"
+    llm_model: str = "gpt-oss-120b"
+    llm_base_url: str | None = None  # None -> provider default (see `base_url`)
+    cerebras_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    llm_reasoning_effort: ReasoningEffort = "low"  # sent to cerebras/groq only
+    llm_max_tokens: int = Field(default=4096, gt=0)  # room for reasoning tokens
+    llm_min_interval_s: float | None = Field(default=None, ge=0)  # None -> provider default
+    llm_num_ctx: int = Field(default=8192, gt=0)  # ollama only: for the 0.9 x warning
     llm_timeout_s: float = Field(default=60, gt=0)
+    ollama_base_url: str = "http://localhost:11434/v1"
 
     # --- Embeddings ---
     embed_base_url: str = "http://host.docker.internal:11434/v1"
@@ -77,6 +91,29 @@ class EngineConfig(BaseSettings):
         # R4.4: the product (PostgreSQL) always caps rows; only eval (SQLite) may disable it.
         if self.dialect == "postgres" and self.row_limit is None:
             raise ValueError("row_limit cannot be disabled for the postgres (product) dialect")
-        if self.llm_provider == "groq" and self.llm_api_key is None:
-            raise ValueError("llm_api_key is required when llm_provider is groq")
+        if self.llm_provider != "ollama" and self.api_key is None:
+            raise ValueError(
+                f"QM_{self.llm_provider.upper()}_API_KEY is required when llm_provider is "
+                f"{self.llm_provider}"
+            )
         return self
+
+    @property
+    def base_url(self) -> str:
+        """The chat endpoint base URL: explicit override, else the provider default."""
+        if self.llm_base_url:
+            return self.llm_base_url
+        if self.llm_provider == "ollama":
+            return self.ollama_base_url
+        return PROVIDER_BASE_URLS[self.llm_provider]
+
+    @property
+    def api_key(self) -> SecretStr | None:
+        """The active provider's key (Ollama needs none)."""
+        return {"cerebras": self.cerebras_api_key, "groq": self.groq_api_key}.get(self.llm_provider)
+
+    @property
+    def min_interval_s(self) -> float:
+        if self.llm_min_interval_s is not None:
+            return self.llm_min_interval_s
+        return PROVIDER_MIN_INTERVAL_S[self.llm_provider]
