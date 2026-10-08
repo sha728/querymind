@@ -36,6 +36,8 @@ DEFAULTS: dict[str, Any] = {
     "ollama_base_url": "http://localhost:11434/v1",
     "embed_base_url": "http://host.docker.internal:11434/v1",
     "embed_model": "nomic-embed-text",
+    "embed_batch_size": 64,
+    "cache_dir": Path(".engine_cache"),
     "target_db_host": "target-db",
     "target_db_port": 5432,
     "target_db_name": "northwind",

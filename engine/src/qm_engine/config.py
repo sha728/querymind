@@ -1,5 +1,6 @@
 """Engine configuration loaded from environment variables (design §6.6, §14.2)."""
 
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
@@ -71,9 +72,11 @@ class EngineConfig(BaseSettings):
     llm_timeout_s: float = Field(default=60, gt=0)
     ollama_base_url: str = "http://localhost:11434/v1"
 
-    # --- Embeddings ---
+    # --- Embeddings (schema linking, few-shot; design D3, D4) ---
     embed_base_url: str = "http://host.docker.internal:11434/v1"
     embed_model: str = "nomic-embed-text"
+    embed_batch_size: int = Field(default=64, gt=0)
+    cache_dir: Path = Field(default=Path(".engine_cache"), validation_alias="ENGINE_CACHE_DIR")
 
     # --- Target DB, read-only role (R1.1, R4.1) ---
     target_db_host: str = Field(default="target-db", validation_alias="TARGET_DB_HOST")
