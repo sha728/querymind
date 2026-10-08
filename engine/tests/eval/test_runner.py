@@ -48,6 +48,7 @@ R93_FIELDS = {
     "completion_tokens",
     "linking_applied",
     "linked_tables",
+    "n_schema_tables",
     "linking_recall",
     "few_shot_ids",
     "timings",
@@ -343,3 +344,51 @@ def test_linking_recall() -> None:
     assert linking_recall(gold, ["singer"]) == 0.5
     assert linking_recall(gold, []) == 0.0
     assert linking_recall("SELECT 1", ["singer"]) is None  # no gold tables
+
+
+# --- linking top-k and summary statistics (T22a, design §10.5 v0.7) ---
+
+
+def test_linking_top_k_comes_from_run_spec_only(spec: RunSpec) -> None:
+    from dataclasses import replace
+
+    product = EngineConfig(_env_file=None, cerebras_api_key="k", linking_top_k=9)  # type: ignore[call-arg]
+    assert eval_config(product, spec).linking_top_k == 5  # design default, not .env
+    assert eval_config(product, replace(spec, linking_top_k=3)).linking_top_k == 3
+
+
+async def test_resume_refuses_changed_linking_top_k(spec: RunSpec, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from qm_eval.runner import ResumeMismatch
+
+    on = replace(spec, linking_mode="on", linking_top_k=3)
+    run_dir = make_runner(on, ScriptedLLM(), tmp_path).create_run_dir()
+    changed = EvalRunner(
+        replace(on, linking_top_k=5), base_cfg(), ScriptedLLM(), runs_dir=tmp_path / "runs",
+        now=lambda: NOW,
+    )  # fmt: skip
+    with pytest.raises(ResumeMismatch, match="flags"):
+        changed.check_resumable(run_dir)
+
+
+def test_linking_stats() -> None:
+    from qm_eval.runner import _linking_stats
+
+    def row(linked: int, total: int, recall: float | None) -> dict[str, object]:
+        return {
+            "linking_applied": True,
+            "linked_tables": ["t"] * linked,
+            "n_schema_tables": total,
+            "linking_recall": recall,
+        }
+
+    rows = [row(3, 6, 1.0), row(4, 4, 1.0), row(2, 5, 0.5), row(1, 3, None)]
+    assert _linking_stats(rows) == {
+        "n_applied": 4,
+        "n_removed_any_table": 3,
+        "share_removed_any_table": 0.75,
+        "mean_linking_recall": 0.8333,
+        "share_recall_1": 0.6667,
+    }
+    assert _linking_stats([{"linking_applied": False}]) is None

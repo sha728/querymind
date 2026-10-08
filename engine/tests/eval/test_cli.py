@@ -265,3 +265,33 @@ def test_linking_defaults_off_and_needs_no_embedder(env: Env) -> None:
     rows = read_results(env.run_dir() / "results.jsonl")
     assert all(r["linking_applied"] is False and r["linking_recall"] is None for r in rows)
     assert env.embedder_created == 0
+
+
+def test_linking_top_k_option_recorded_and_summarized(env: Env) -> None:
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3", "--linking", "on", "--linking-top-k", "2")) == 0
+    run_dir = env.run_dir()
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["flags"]["linking_top_k"] == 2
+    rows = read_results(run_dir / "results.jsonl")
+    assert all(r["n_schema_tables"] == 6 for r in rows)  # the fixture database has 6 tables
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    stats = summary["linking"]
+    assert stats["n_applied"] == 3
+    removed = sum(1 for r in rows if len(r["linked_tables"]) < 6)
+    assert stats["n_removed_any_table"] == removed
+    recalls = [r["linking_recall"] for r in rows]
+    assert stats["mean_linking_recall"] == round(sum(recalls) / len(recalls), 4)
+
+
+def test_linking_off_summary_has_no_linking_stats(env: Env) -> None:
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3")) == 0
+    summary = json.loads((env.run_dir() / "summary.json").read_text(encoding="utf-8"))
+    assert summary["linking"] is None
+
+
+def test_bad_linking_top_k_is_a_usage_error(env: Env) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(env.args("--subset", "3", "--linking-top-k", "0"))
+    assert exit_info.value.code == 2

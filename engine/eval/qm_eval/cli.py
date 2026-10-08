@@ -74,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="off",
         help="schema linking (design 6.3); 'on' forces it for ablations (default off)",
     )
+    run.add_argument(
+        "--linking-top-k",
+        type=int,
+        default=5,
+        metavar="K",
+        help="tables kept by linking before FK bridging (default 5; A1/A4 use 3)",
+    )
     run.add_argument("--resume", type=Path, metavar="RUN_DIR", help="continue an interrupted run")
     run.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     run.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -98,6 +105,7 @@ def _spec(args: argparse.Namespace) -> RunSpec:
         timeout_ms=args.timeout_ms,
         split=args.split,
         linking_mode=args.linking,
+        linking_top_k=args.linking_top_k,
     )
 
 
@@ -131,6 +139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run" and args.subset is not None and args.subset <= 0:
         parser.error("--subset must be a positive integer")
+    if args.command == "run" and args.linking_top_k <= 0:
+        parser.error("--linking-top-k must be a positive integer")
     configure_logging(target="stderr")  # stdout carries the result
     if args.command == "cost":
         try:

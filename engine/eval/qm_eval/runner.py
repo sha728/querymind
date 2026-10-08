@@ -84,6 +84,7 @@ class RunSpec:
     # Techniques are off unless a `qm-eval` option turns them on (design §6.7 v0.6);
     # product defaults from .env never leak into an eval run.
     linking_mode: LinkingMode = "off"
+    linking_top_k: int = 5  # design default; A1/A4 use 3 (design §10.5 v0.7)
     few_shot: bool = False
     self_correction: bool = False
     max_corrections: int = 2
@@ -174,6 +175,7 @@ def eval_config(base: EngineConfig, spec: RunSpec | None = None) -> EngineConfig
             "summary_enabled": False,
             "include_date": False,
             "linking_mode": spec_techniques.linking_mode,
+            "linking_top_k": spec_techniques.linking_top_k,
             "few_shot_enabled": spec_techniques.few_shot,
             "self_correction_enabled": spec_techniques.self_correction,
             "max_corrections": spec_techniques.max_corrections,
@@ -195,6 +197,7 @@ def build_config_record(
         "timeout_ms": spec.timeout_ms,
         "flags": {
             "linking_mode": cfg.linking_mode,
+            "linking_top_k": cfg.linking_top_k,
             "few_shot_enabled": cfg.few_shot_enabled,
             "self_correction_enabled": cfg.self_correction_enabled,
             "max_corrections": cfg.max_corrections,
@@ -264,6 +267,7 @@ def result_record(
     correct: bool,
     gold_error: str | None,
     linking_recall: float | None = None,
+    n_schema_tables: int | None = None,
 ) -> dict[str, object]:
     """One results.jsonl line (R9.3)."""
     last = res.attempts[-1] if res.attempts else None
@@ -297,6 +301,7 @@ def result_record(
         "completion_tokens": usage.completion_tokens if usage else None,
         "linking_applied": res.linking.applied,
         "linked_tables": list(res.linking.tables),
+        "n_schema_tables": n_schema_tables,
         "linking_recall": linking_recall,
         "few_shot_ids": list(res.few_shot_ids),
         "timings": asdict(res.timings),
@@ -345,6 +350,29 @@ def _ex(rows: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _linking_stats(rows: list[dict[str, object]]) -> dict[str, object] | None:
+    """How much linking changed the prompt (design §10.4 v0.7); None if it never applied."""
+    applied = [r for r in rows if r.get("linking_applied")]
+    if not applied:
+        return None
+    removed = [
+        r
+        for r in applied
+        if isinstance(r.get("n_schema_tables"), int)
+        and len(r["linked_tables"]) < r["n_schema_tables"]  # type: ignore[arg-type,operator]
+    ]
+    recalls = [float(r["linking_recall"]) for r in applied if r.get("linking_recall") is not None]  # type: ignore[arg-type]
+    return {
+        "n_applied": len(applied),
+        "n_removed_any_table": len(removed),
+        "share_removed_any_table": round(len(removed) / len(applied), 4),
+        "mean_linking_recall": round(sum(recalls) / len(recalls), 4) if recalls else None,
+        "share_recall_1": round(sum(1 for x in recalls if x == 1.0) / len(recalls), 4)
+        if recalls
+        else None,
+    }
+
+
 def summarize(run_dir: Path, *, ended_at: datetime | None = None) -> dict[str, object]:
     """Compute summary.json from config.json and results.jsonl (never from memory)."""
     config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
@@ -372,6 +400,7 @@ def summarize(run_dir: Path, *, ended_at: datetime | None = None) -> dict[str, o
         "status_counts": dict(Counter(str(r["status"]) for r in rows)),
         "prompt_tokens": tokens("prompt_tokens"),
         "completion_tokens": tokens("completion_tokens"),
+        "linking": _linking_stats(rows),
         "latency_ms": {
             "p50": percentile(latencies, 50),
             "p95": percentile(latencies, 95),
@@ -498,6 +527,7 @@ class EvalRunner:
                     score.correct,
                     score.gold_error,
                     linking_recall(ex.query, res.linking.tables) if res.linking.applied else None,
+                    len(self._schema(ex.db_id).tables),
                 ),
             )
             _log.info(
