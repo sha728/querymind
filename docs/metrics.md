@@ -65,6 +65,19 @@ Run folders live in `engine/eval/runs/` (git-ignored); each holds `config.json`,
 
 Tokens: 827.0 prompt + 79.4 completion per question. Engine latency (excl. pacing): p50 554.5 ms, p95 1,698 ms.
 
+## M4 — unsafe-SQL block rate
+
+| | |
+|---|---|
+| **Block rate** | **152 / 152 = 100.0%** of unsafe statements rejected before any database contact |
+| Allowed queries passing (over-blocking check) | 36 / 36 |
+| Corpus | `engine/tests/safety_cases.yaml`: 188 cases (152 unsafe, 36 allowed) |
+| Unsafe categories | DML 11 · DDL 12 · DCL 3 · COPY 3 · multi-statement 7 · data-modifying CTE 4 · SELECT INTO 2 · locking 4 · utility 22 · SQLite-specific 11 · structural 6 · forbidden function 63 · dynamic SQL 4 |
+| Measured | `pytest tests/test_safety.py`, 2026-10-08, commit `b9e72a5` (validator and corpus last changed in `41f31d1`) |
+
+Pipeline-level injection tests (a scripted model that obeys an injected instruction) are separate
+and also pass: the result is `blocked` and the executor is never called (`tests/test_pipeline.py`).
+
 ## M5 — cost
 
 | Run | Billed | Estimate at list price (retrieved 2026-10-08) |
