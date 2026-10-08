@@ -1,0 +1,37 @@
+# Secrets (N1)
+.env
+
+# Process docs kept local by owner request
+CLAUDE.md
+PROMPTS.md
+specs/
+
+# Spider data and eval run outputs (design §10)
+engine/eval/data/
+engine/eval/runs/
+
+# Engine caches
+.engine_cache/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# .NET
+bin/
+obj/
+
+# Node
+node_modules/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
