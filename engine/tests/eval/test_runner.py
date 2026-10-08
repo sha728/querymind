@@ -1,0 +1,210 @@
+import json
+import shutil
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+import qm_engine.pipeline
+from fakes import ScriptedLLM
+from qm_engine.config import EngineConfig
+from qm_engine.llm.client import LLMError
+from qm_eval import runner
+from qm_eval.runner import EvalRunner, RunSpec, eval_config, git_info, percentile, read_results
+from qm_eval.spider import subset_hash, write_manifest
+
+FIXTURE = Path(__file__).parent / "fixtures" / "spider_mini"
+NOW = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+
+REPLIES = [
+    "```sql\nSELECT count(*) FROM customers\n```",  # q0: correct
+    "```sql\nSELECT name FROM products ORDER BY price ASC\n```",  # q1: wrong order -> incorrect
+    "```sql\nDROP TABLE orders\n```",  # q2: blocked -> incorrect
+]
+
+R93_FIELDS = {
+    "question_id",
+    "db_id",
+    "hardness",
+    "question",
+    "gold_sql",
+    "pred_sql",
+    "status",
+    "correct",
+    "gold_error",
+    "error_code",
+    "error",
+    "attempts",
+    "n_attempts",
+    "prompt_tokens",
+    "completion_tokens",
+    "linking_applied",
+    "linked_tables",
+    "linking_recall",
+    "few_shot_ids",
+    "timings",
+}
+
+
+@pytest.fixture
+def spec(tmp_path: Path) -> RunSpec:
+    root = tmp_path / "spider"
+    shutil.copytree(FIXTURE, root)
+    manifest = tmp_path / "manifest.sha256"
+    write_manifest(root, manifest)
+    return RunSpec(
+        data_root=root,
+        manifest=manifest,
+        question_ids=(0, 1, 2),
+        full=False,
+        seed=42,
+        tag="smoke",
+        timeout_ms=5000,
+    )
+
+
+def base_cfg() -> EngineConfig:
+    # A product-style config: the runner must override the eval-only settings itself.
+    return EngineConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        cerebras_api_key="csk-SECRET-123",
+        self_correction_enabled=False,
+        linking_mode="off",
+        few_shot_enabled=False,
+    )
+
+
+def make_runner(spec: RunSpec, llm: ScriptedLLM, tmp_path: Path) -> EvalRunner:
+    return EvalRunner(spec, base_cfg(), llm, runs_dir=tmp_path / "runs", now=lambda: NOW)
+
+
+async def test_run_writes_config_results_and_summary(spec: RunSpec, tmp_path: Path) -> None:
+    llm = ScriptedLLM(*REPLIES, prompt_tokens=200, completion_tokens=30)
+    run_dir = await make_runner(spec, llm, tmp_path).run()
+
+    assert run_dir.name == "20261008T120000Z_smoke"
+
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["n_questions"] == 3
+    assert config["question_id_hash"] == subset_hash([0, 1, 2])
+    assert config["seed"] == 42 and config["full"] is False
+    assert config["flags"]["row_limit"] is None
+    assert config["flags"]["unanswerable_enabled"] is False
+    assert config["llm"] == {
+        "provider": "cerebras",
+        "model": "gpt-oss-120b",
+        "base_url_host": "api.cerebras.ai",
+        "reasoning_effort": "low",
+        "max_tokens": 4096,
+        "min_interval_s": 12.0,
+        "temperature": 0,
+    }
+    assert set(config["versions"]) == {"qm_engine", "sqlglot", "python"}
+    assert "git_sha" in config and isinstance(config["git_dirty"], bool)
+    assert len(config["spider_manifest_hash"]) == 64
+    assert "csk-SECRET-123" not in (run_dir / "config.json").read_text(encoding="utf-8")
+
+    rows = read_results(run_dir / "results.jsonl")
+    assert [r["question_id"] for r in rows] == [0, 1, 2]
+    for r in rows:
+        assert set(r) == R93_FIELDS
+    assert [r["status"] for r in rows] == ["success", "success", "blocked"]
+    assert [r["correct"] for r in rows] == [True, False, False]
+    assert rows[0]["pred_sql"] == "SELECT count(*) FROM customers"
+    assert rows[0]["hardness"] == "easy"
+    assert rows[2]["error_code"] == "FORBIDDEN_STATEMENT"
+    assert rows[0]["attempts"][0]["prompt_tokens"] == 200
+    assert rows[0]["linking_recall"] is None  # added in T22
+
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert (summary["n"], summary["n_scored"], summary["n_correct"]) == (3, 3, 1)
+    assert summary["ex"] == 0.3333
+    assert summary["by_hardness"]["easy"]["n_correct"] == 1
+    assert summary["n_gold_errors"] == 0
+    assert summary["status_counts"] == {"success": 2, "blocked": 1}
+    assert summary["prompt_tokens"] == {"total": 600, "mean_per_question": 200.0, "n_missing": 0}
+    assert summary["complete"] is True
+    assert summary["reportable"] is False  # subset run
+
+
+async def test_eval_prompts_use_sqlite_and_no_date(spec: RunSpec, tmp_path: Path) -> None:
+    llm = ScriptedLLM(*REPLIES)
+    await make_runner(spec, llm, tmp_path).run()
+    system = llm.calls[0][0]["content"]
+    assert system.startswith("You are an expert SQLite SQL writer.")
+    assert "Today's date" not in system
+    assert "CANNOT_ANSWER" not in system
+
+
+async def test_interrupted_run_leaves_valid_lines_and_no_summary(
+    spec: RunSpec, tmp_path: Path
+) -> None:
+    llm = ScriptedLLM(REPLIES[0], REPLIES[1], LLMError("LLM_RATE_LIMITED", "quota"))
+    r = make_runner(spec, llm, tmp_path)
+    run_dir = r.create_run_dir()
+    with pytest.raises(LLMError):
+        await r.run(run_dir)
+    lines = (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert [json.loads(line)["question_id"] for line in lines] == [0, 1]
+    assert not (run_dir / "summary.json").exists()
+
+
+async def test_gold_error_is_excluded_from_ex(spec: RunSpec, tmp_path: Path) -> None:
+    dev = spec.data_root / "dev.json"
+    items = json.loads(dev.read_text(encoding="utf-8"))
+    items[1]["query"] = "SELECT * FROM no_such_table"
+    dev.write_text(json.dumps(items), encoding="utf-8")
+    write_manifest(spec.data_root, spec.manifest)
+
+    run_dir = await make_runner(spec, ScriptedLLM(*REPLIES), tmp_path).run()
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["n_gold_errors"] == 1
+    assert (summary["n_scored"], summary["n_correct"], summary["ex"]) == (2, 1, 0.5)
+    rows = read_results(run_dir / "results.jsonl")
+    assert rows[1]["hardness"] is None and rows[1]["gold_error"] is not None
+
+
+async def test_manifest_mismatch_refuses_to_run(spec: RunSpec, tmp_path: Path) -> None:
+    (spec.data_root / "tables.json").write_text("[1]", encoding="utf-8")
+    llm = ScriptedLLM(*REPLIES)
+    with pytest.raises(Exception, match="manifest"):
+        await make_runner(spec, llm, tmp_path).run()
+    assert llm.calls == []
+
+
+def test_runner_uses_the_product_pipeline() -> None:
+    assert runner.Pipeline is qm_engine.pipeline.Pipeline  # R9.2: same code, not a copy
+
+
+def test_eval_config_overrides_product_settings() -> None:
+    product = EngineConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        cerebras_api_key="k",
+        dialect="postgres",
+        row_limit=1000,
+        include_date=True,
+        unanswerable_enabled=True,
+        summary_enabled=True,
+    )
+    cfg = eval_config(product)
+    assert (cfg.dialect, cfg.row_limit) == ("sqlite", None)
+    assert not (cfg.include_date or cfg.unanswerable_enabled or cfg.summary_enabled)
+    assert cfg.api_key is not None and cfg.api_key.get_secret_value() == "k"
+
+
+def test_git_info_outside_a_repo_is_dirty(tmp_path: Path) -> None:
+    info = git_info(tmp_path)
+    assert info.sha is None and info.dirty is True
+
+
+def test_git_info_in_this_repo() -> None:
+    info = git_info(Path(__file__).resolve().parents[3])
+    assert info.sha is not None and len(info.sha) == 40
+
+
+def test_percentile_matches_linear_interpolation() -> None:
+    assert percentile([], 50) is None
+    assert percentile([10.0], 95) == 10.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 50) == 2.5
+    assert percentile([float(x) for x in range(1, 101)], 95) == pytest.approx(95.05)
