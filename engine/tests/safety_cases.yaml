@@ -1,0 +1,132 @@
+# Safety validator corpus (design §7.5, R4.5, M4).
+# Each case: id, category, dialect, sql, expected_code.
+# expected_code = null means the query is safe and must PASS (category "allowed").
+# Categories forbidden_function, dynamic_sql and load_extension are added in T8.
+
+# --- dml ---
+- {id: dml-01, category: dml, dialect: postgres, sql: "INSERT INTO customers VALUES ('X', 'Y')", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-02, category: dml, dialect: postgres, sql: "insert into customers (customer_id) select 'x'", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-03, category: dml, dialect: postgres, sql: "UPDATE products SET unit_price = 0", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-04, category: dml, dialect: postgres, sql: "  UpDaTe products\n\tSET unit_price = 0 WHERE 1=1  ", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-05, category: dml, dialect: postgres, sql: "DELETE FROM orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-06, category: dml, dialect: postgres, sql: "/* harmless */ DELETE /* really */ FROM \"orders\" -- bye", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-07, category: dml, dialect: postgres, sql: "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-08, category: dml, dialect: postgres, sql: "INSERT INTO t SELECT * FROM t RETURNING *", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-09, category: dml, dialect: sqlite, sql: "INSERT OR REPLACE INTO t VALUES (1)", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-10, category: dml, dialect: sqlite, sql: "REPLACE INTO t VALUES (1)", expected_code: FORBIDDEN_STATEMENT}
+- {id: dml-11, category: dml, dialect: sqlite, sql: "delete from singer where 1", expected_code: FORBIDDEN_STATEMENT}
+
+# --- ddl ---
+- {id: ddl-01, category: ddl, dialect: postgres, sql: "CREATE TABLE x (a int)", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-02, category: ddl, dialect: postgres, sql: "CREATE TABLE x AS SELECT * FROM orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-03, category: ddl, dialect: postgres, sql: "create or replace view v as select 1", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-04, category: ddl, dialect: postgres, sql: "CREATE FUNCTION f() RETURNS int AS 'select 1' LANGUAGE sql", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-05, category: ddl, dialect: postgres, sql: "DROP TABLE orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-06, category: ddl, dialect: postgres, sql: "dRoP tAbLe IF EXISTS \"Orders\" CASCADE", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-07, category: ddl, dialect: postgres, sql: "ALTER TABLE orders ADD COLUMN x int", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-08, category: ddl, dialect: postgres, sql: "ALTER ROLE querymind_ro SUPERUSER", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-09, category: ddl, dialect: postgres, sql: "TRUNCATE orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-10, category: ddl, dialect: postgres, sql: "TRUNCATE TABLE orders, customers RESTART IDENTITY", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-11, category: ddl, dialect: sqlite, sql: "CREATE TEMP TABLE x(a)", expected_code: FORBIDDEN_STATEMENT}
+- {id: ddl-12, category: ddl, dialect: sqlite, sql: "DROP TABLE singer", expected_code: FORBIDDEN_STATEMENT}
+
+# --- dcl ---
+- {id: dcl-01, category: dcl, dialect: postgres, sql: "GRANT SELECT ON orders TO PUBLIC", expected_code: FORBIDDEN_STATEMENT}
+- {id: dcl-02, category: dcl, dialect: postgres, sql: "grant all privileges on all tables in schema public to querymind_ro", expected_code: FORBIDDEN_STATEMENT}
+- {id: dcl-03, category: dcl, dialect: postgres, sql: "REVOKE SELECT ON orders FROM querymind_ro", expected_code: FORBIDDEN_STATEMENT}
+
+# --- copy ---
+- {id: copy-01, category: copy, dialect: postgres, sql: "COPY orders TO '/tmp/orders.csv'", expected_code: FORBIDDEN_STATEMENT}
+- {id: copy-02, category: copy, dialect: postgres, sql: "COPY (SELECT 1) TO PROGRAM 'id'", expected_code: FORBIDDEN_STATEMENT}
+- {id: copy-03, category: copy, dialect: postgres, sql: "copy orders from '/etc/passwd'", expected_code: FORBIDDEN_STATEMENT}
+
+# --- multi_statement (forbidden content wins over the statement count) ---
+- {id: multi-01, category: multi_statement, dialect: postgres, sql: "SELECT 1; DROP TABLE orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: multi-02, category: multi_statement, dialect: postgres, sql: "SeLeCt 1;dRoP tAbLe orders;", expected_code: FORBIDDEN_STATEMENT}
+- {id: multi-03, category: multi_statement, dialect: postgres, sql: "SELECT 1; -- ok\n DELETE FROM orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: multi-04, category: multi_statement, dialect: postgres, sql: "SELECT 1;\n/* x */ INSERT INTO t VALUES (1)", expected_code: FORBIDDEN_STATEMENT}
+- {id: multi-05, category: multi_statement, dialect: postgres, sql: "SELECT 1; SELECT 2", expected_code: MULTIPLE_STATEMENTS}
+- {id: multi-06, category: multi_statement, dialect: sqlite, sql: "SELECT * FROM singer; SELECT * FROM concert;", expected_code: MULTIPLE_STATEMENTS}
+- {id: multi-07, category: multi_statement, dialect: sqlite, sql: "SELECT 1; ATTACH DATABASE 'x.db' AS x", expected_code: FORBIDDEN_STATEMENT}
+
+# --- data_modifying_cte ---
+- {id: cte-01, category: data_modifying_cte, dialect: postgres, sql: "WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d", expected_code: FORBIDDEN_STATEMENT}
+- {id: cte-02, category: data_modifying_cte, dialect: postgres, sql: "WITH i AS (INSERT INTO t VALUES (1) RETURNING *) SELECT count(*) FROM i", expected_code: FORBIDDEN_STATEMENT}
+- {id: cte-03, category: data_modifying_cte, dialect: postgres, sql: "with u as (update products set unit_price = 0 returning 1) select * from u", expected_code: FORBIDDEN_STATEMENT}
+- {id: cte-04, category: data_modifying_cte, dialect: postgres, sql: "WITH a AS (SELECT 1), d AS (DELETE FROM t RETURNING *) SELECT * FROM a", expected_code: FORBIDDEN_STATEMENT}
+
+# --- select_into ---
+- {id: into-01, category: select_into, dialect: postgres, sql: "SELECT * INTO new_orders FROM orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: into-02, category: select_into, dialect: postgres, sql: "select customer_id into temp tmp_c from customers", expected_code: FORBIDDEN_STATEMENT}
+
+# --- locking ---
+- {id: lock-01, category: locking, dialect: postgres, sql: "SELECT * FROM orders FOR UPDATE", expected_code: FORBIDDEN_STATEMENT}
+- {id: lock-02, category: locking, dialect: postgres, sql: "SELECT * FROM orders FOR SHARE", expected_code: FORBIDDEN_STATEMENT}
+- {id: lock-03, category: locking, dialect: postgres, sql: "select * from orders for no key update skip locked", expected_code: FORBIDDEN_STATEMENT}
+- {id: lock-04, category: locking, dialect: postgres, sql: "LOCK TABLE orders IN ACCESS EXCLUSIVE MODE", expected_code: FORBIDDEN_STATEMENT}
+
+# --- utility (unparsed statements fall back to Command; others are not SELECTs) ---
+- {id: util-01, category: utility, dialect: postgres, sql: "VACUUM", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-02, category: utility, dialect: postgres, sql: "SET ROLE postgres", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-03, category: utility, dialect: postgres, sql: "SET search_path = evil", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-04, category: utility, dialect: postgres, sql: "DO $$ BEGIN PERFORM pg_sleep(10); END $$", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-05, category: utility, dialect: postgres, sql: "CALL do_something()", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-06, category: utility, dialect: postgres, sql: "RESET ALL", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-07, category: utility, dialect: postgres, sql: "BEGIN", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-08, category: utility, dialect: postgres, sql: "COMMIT", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-09, category: utility, dialect: postgres, sql: "ROLLBACK", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-10, category: utility, dialect: postgres, sql: "EXPLAIN ANALYZE DELETE FROM orders", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-11, category: utility, dialect: postgres, sql: "PREPARE p AS SELECT 1", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-12, category: utility, dialect: postgres, sql: "EXECUTE p", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-13, category: utility, dialect: postgres, sql: "REFRESH MATERIALIZED VIEW v", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-14, category: utility, dialect: postgres, sql: "LOAD 'auto_explain'", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-15, category: utility, dialect: postgres, sql: "SHOW ALL", expected_code: FORBIDDEN_STATEMENT}
+- {id: util-16, category: utility, dialect: postgres, sql: "LISTEN channel", expected_code: NOT_SELECT}
+- {id: util-17, category: utility, dialect: postgres, sql: "NOTIFY channel", expected_code: NOT_SELECT}
+- {id: util-18, category: utility, dialect: postgres, sql: "DISCARD ALL", expected_code: NOT_SELECT}
+- {id: util-19, category: utility, dialect: postgres, sql: "CHECKPOINT", expected_code: NOT_SELECT}
+- {id: util-20, category: utility, dialect: postgres, sql: "VALUES (1), (2)", expected_code: NOT_SELECT}
+- {id: util-21, category: utility, dialect: postgres, sql: "ANALYZE orders", expected_code: NOT_SELECT}
+- {id: util-22, category: utility, dialect: postgres, sql: "COMMENT ON TABLE orders IS 'x'", expected_code: NOT_SELECT}
+
+# --- sqlite_specific ---
+- {id: sqlite-01, category: sqlite_specific, dialect: sqlite, sql: "ATTACH DATABASE '/tmp/x.db' AS x", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-02, category: sqlite_specific, dialect: sqlite, sql: "attach '/tmp/x.db' as x", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-03, category: sqlite_specific, dialect: sqlite, sql: "DETACH x", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-04, category: sqlite_specific, dialect: sqlite, sql: "PRAGMA writable_schema = 1", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-05, category: sqlite_specific, dialect: sqlite, sql: "PRAGMA table_info(singer)", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-06, category: sqlite_specific, dialect: sqlite, sql: "VACUUM INTO '/tmp/copy.db'", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-07, category: sqlite_specific, dialect: sqlite, sql: "BEGIN IMMEDIATE", expected_code: FORBIDDEN_STATEMENT}
+- {id: sqlite-08, category: sqlite_specific, dialect: sqlite, sql: "SAVEPOINT a", expected_code: NOT_SELECT}
+
+# --- structural (retryable) ---
+- {id: struct-01, category: structural, dialect: postgres, sql: "", expected_code: EMPTY_SQL}
+- {id: struct-02, category: structural, dialect: postgres, sql: "   \n\t ", expected_code: EMPTY_SQL}
+- {id: struct-03, category: structural, dialect: postgres, sql: "-- just a comment", expected_code: EMPTY_SQL}
+- {id: struct-04, category: structural, dialect: postgres, sql: "/* nothing */ ;", expected_code: EMPTY_SQL}
+- {id: struct-05, category: structural, dialect: postgres, sql: "SELECT FROM WHERE (", expected_code: PARSE_ERROR}
+- {id: struct-06, category: structural, dialect: postgres, sql: "SELECT 'unterminated", expected_code: PARSE_ERROR}
+
+# --- allowed: valid read-only queries that must PASS (guards against over-blocking) ---
+- {id: ok-01, category: allowed, dialect: postgres, sql: "SELECT 1", expected_code: null}
+- {id: ok-02, category: allowed, dialect: postgres, sql: "SELECT 1;", expected_code: null}
+- {id: ok-03, category: allowed, dialect: postgres, sql: "select c.company_name, sum(od.unit_price * od.quantity) as total from customers c join orders o on o.customer_id = c.customer_id join order_details od on od.order_id = o.order_id group by c.company_name order by total desc limit 5", expected_code: null}
+- {id: ok-04, category: allowed, dialect: postgres, sql: "WITH t AS (SELECT customer_id, count(*) AS n FROM orders GROUP BY 1) SELECT * FROM t WHERE n > 3", expected_code: null}
+- {id: ok-05, category: allowed, dialect: postgres, sql: "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 5) SELECT * FROM c", expected_code: null}
+- {id: ok-06, category: allowed, dialect: postgres, sql: "SELECT country FROM customers UNION SELECT country FROM suppliers", expected_code: null}
+- {id: ok-07, category: allowed, dialect: postgres, sql: "SELECT 1 INTERSECT SELECT 1", expected_code: null}
+- {id: ok-08, category: allowed, dialect: postgres, sql: "SELECT 1 EXCEPT SELECT 2", expected_code: null}
+- {id: ok-09, category: allowed, dialect: postgres, sql: "(SELECT 1)", expected_code: null}
+- {id: ok-10, category: allowed, dialect: postgres, sql: "SELECT rank() OVER (PARTITION BY category_id ORDER BY unit_price DESC) FROM products", expected_code: null}
+- {id: ok-11, category: allowed, dialect: postgres, sql: "SELECT date_trunc('month', order_date) AS m, count(*) FROM orders GROUP BY 1 ORDER BY 1", expected_code: null}
+- {id: ok-12, category: allowed, dialect: postgres, sql: "SELECT 'DROP TABLE orders; DELETE FROM x' AS harmless_text", expected_code: null}
+- {id: ok-13, category: allowed, dialect: postgres, sql: "SELECT \"delete\", \"update\", \"insert\" FROM \"grant\"", expected_code: null}
+- {id: ok-14, category: allowed, dialect: postgres, sql: "SELECT a::text, CAST(b AS int) FROM t WHERE a IN (SELECT b FROM u) LIMIT 10 OFFSET 5", expected_code: null}
+- {id: ok-15, category: allowed, dialect: postgres, sql: "/* top 5 */ SELECT * FROM products -- by price\nORDER BY unit_price DESC LIMIT 5", expected_code: null}
+- {id: ok-16, category: allowed, dialect: postgres, sql: "SELECT * FROM a FULL OUTER JOIN b USING (id)", expected_code: null}
+- {id: ok-17, category: allowed, dialect: postgres, sql: "SELECT product_name, CASE WHEN units_in_stock = 0 THEN 'out' ELSE 'in' END FROM products", expected_code: null}
+- {id: ok-18, category: allowed, dialect: postgres, sql: "SELECT EXISTS (SELECT 1 FROM orders WHERE freight > 100)", expected_code: null}
+- {id: ok-19, category: allowed, dialect: sqlite, sql: "SELECT strftime('%Y', order_date), count(*) FROM orders GROUP BY 1", expected_code: null}
+- {id: ok-20, category: allowed, dialect: sqlite, sql: "SELECT \"Ship Date\" FROM shipments LIMIT 5 OFFSET 2", expected_code: null}
+- {id: ok-21, category: allowed, dialect: sqlite, sql: "SELECT T1.name FROM singer AS T1 JOIN singer_in_concert AS T2 ON T1.singer_id = T2.singer_id GROUP BY T1.name HAVING count(*) > 1", expected_code: null}
+- {id: ok-22, category: allowed, dialect: sqlite, sql: "select count(*) from singer where country = 'France' and age > 30", expected_code: null}
