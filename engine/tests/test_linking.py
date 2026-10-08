@@ -38,7 +38,12 @@ CHAIN = SchemaSnapshot.build(
 
 
 def cfg(tmp_path: Path, **kwargs: object) -> EngineConfig:
-    base: dict[str, object] = {"cerebras_api_key": "k", "cache_dir": tmp_path, "dialect": "sqlite"}
+    base: dict[str, object] = {
+        "cerebras_api_key": "k",
+        "cache_dir": tmp_path,
+        "dialect": "sqlite",
+        "few_shot_enabled": False,
+    }
     return EngineConfig(_env_file=None, **(base | kwargs))  # type: ignore[arg-type]
 
 

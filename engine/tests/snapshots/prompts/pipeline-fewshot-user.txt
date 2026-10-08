@@ -1,0 +1,16 @@
+### Database schema
+CREATE TABLE orders (
+  order_id integer PRIMARY KEY  -- e.g. 1
+);
+
+### Examples
+Question: How many orders are there?
+SQL:
+```sql
+SELECT count(*) FROM orders
+```
+
+### Task
+<question>
+How many orders were placed?
+</question>

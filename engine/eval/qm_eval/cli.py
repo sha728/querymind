@@ -75,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="schema linking (design 6.3); 'on' forces it for ablations (default off)",
     )
     run.add_argument(
+        "--few-shot",
+        choices=["off", "on"],
+        default="off",
+        help="similar Spider-train examples in the prompt (design 6.4; default off)",
+    )
+    run.add_argument(
         "--linking-top-k",
         type=int,
         default=5,
@@ -106,6 +112,7 @@ def _spec(args: argparse.Namespace) -> RunSpec:
         split=args.split,
         linking_mode=args.linking,
         linking_top_k=args.linking_top_k,
+        few_shot=args.few_shot == "on",
     )
 
 
@@ -113,7 +120,8 @@ async def _run(args: argparse.Namespace) -> int:
     cfg = make_config()
     llm = make_llm(cfg)
     spec = _spec(args)
-    embedder = make_embedder(cfg) if spec.linking_mode != "off" else None
+    needs_embedder = spec.linking_mode != "off" or spec.few_shot
+    embedder = make_embedder(cfg) if needs_embedder else None
     try:
         runner = EvalRunner(spec, cfg, llm, runs_dir=args.runs_dir, embedder=embedder)
         if args.resume is not None:

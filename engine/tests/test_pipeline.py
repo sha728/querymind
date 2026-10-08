@@ -30,6 +30,7 @@ def cfg(**kwargs: object) -> EngineConfig:
         "unanswerable_enabled": False,
         "include_date": False,
         "self_correction_enabled": False,
+        "few_shot_enabled": False,
         "cerebras_api_key": "k",
     }
     return EngineConfig(_env_file=None, **(base | kwargs))  # type: ignore[arg-type]

@@ -295,3 +295,40 @@ def test_bad_linking_top_k_is_a_usage_error(env: Env) -> None:
     with pytest.raises(SystemExit) as exit_info:
         cli.main(env.args("--subset", "3", "--linking-top-k", "0"))
     assert exit_info.value.code == 2
+
+
+# --- few-shot (T23) ---
+
+
+def test_few_shot_on_uses_train_pool_and_records_it(env: Env) -> None:
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3", "--few-shot", "on")) == 0
+    run_dir = env.run_dir()
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["flags"]["few_shot_enabled"] is True and config["flags"]["few_shot_k"] == 3
+    assert config["few_shot_pool"]["source"] == "train_spider.json"
+    assert config["few_shot_pool"]["n_examples"] == 2
+    assert config["embedding"]["used"] is True
+    rows = read_results(run_dir / "results.jsonl")
+    for r in rows:
+        assert r["few_shot_ids"]  # examples were chosen...
+        assert all(i.startswith("train-") for i in r["few_shot_ids"])  # ...only from train
+    assert "### Examples" in env.llm.calls[0][1]["content"]
+    assert env.embedder_created == 1
+
+
+def test_few_shot_env_default_does_not_apply(env: Env) -> None:
+    env.cfg_overrides = {"few_shot_enabled": True}  # product default must not leak
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3")) == 0
+    config = json.loads((env.run_dir() / "config.json").read_text(encoding="utf-8"))
+    assert config["flags"]["few_shot_enabled"] is False
+    assert config["few_shot_pool"] is None
+    assert all(not r["few_shot_ids"] for r in read_results(env.run_dir() / "results.jsonl"))
+    assert "### Examples" not in env.llm.calls[0][1]["content"]
+    assert env.embedder_created == 0
+
+
+def test_resume_refuses_changed_few_shot(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+    run_dir = _start_run(env)
+    _assert_refused(env, run_dir, capsys, "flags", "--few-shot", "on")

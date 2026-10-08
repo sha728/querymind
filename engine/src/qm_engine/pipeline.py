@@ -1,7 +1,7 @@
 """The single orchestration path shared by the product and the evaluation harness (design §6).
 
 T13 implements the zero-shot path: steps 1, 4-8 and 12 of design §6.2; T22 adds schema
-linking (step 2). Few-shot selection (step 3, T23), self-correction (step 9, T24), charts
+linking (step 2) and T23 few-shot selection (step 3). Self-correction (step 9, T24), charts
 (step 10, T30) and summaries (step 11, T31) are added by later tasks. Until T24, a failed
 attempt ends the request even when ``self_correction_enabled`` is set.
 
@@ -9,7 +9,7 @@ LLM transport errors (``LLMError``) are not turned into a status: they propagate
 return 503 and the harness can apply its rate-limit rules (design §10.3, §12).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Literal
@@ -17,11 +17,12 @@ from typing import Literal
 from qm_engine.config import EngineConfig
 from qm_engine.execution.base import ExecResult, ExecutionError, Executor, ResultColumn
 from qm_engine.extract import extract
+from qm_engine.fewshot import FewShotSelector
 from qm_engine.linking import SchemaLinker
 from qm_engine.llm.client import ChatResult, LLMClient
 from qm_engine.llm.embeddings import Embedder
 from qm_engine.observability import Timer, get_logger
-from qm_engine.prompts import build_messages
+from qm_engine.prompts import Example, build_messages
 from qm_engine.safety.validator import validate
 from qm_engine.schema.models import SchemaSnapshot
 from qm_engine.schema.serialize import serialize_schema
@@ -111,12 +112,14 @@ class Pipeline:
         executor: Executor,
         *,
         embedder: Embedder | None = None,
+        fewshot: FewShotSelector | None = None,
         today: Callable[[], date] = date.today,
     ) -> None:
         self.cfg = cfg
         self.llm = llm
         self.executor = executor
         self.linker = SchemaLinker(cfg, embedder)
+        self.fewshot = fewshot
         self._today = today
 
     async def run(self, question: str, schema: SchemaSnapshot) -> PipelineResult:
@@ -153,10 +156,20 @@ class Pipeline:
             linking = await self.linker.link(question, schema)
         linking_ms = t_link.elapsed_ms
 
-        # Steps 3-4: no examples yet (T23); prompt with the linked (or full) schema.
+        # Step 3: few-shot examples by similarity (design §6.4).
+        examples: Sequence[Example] = ()
+        with Timer() as t_fewshot:
+            if cfg.few_shot_enabled:
+                if self.fewshot is None:
+                    raise ValueError("few-shot is enabled but no example pool was given")
+                examples = await self.fewshot.select(question, cfg.few_shot_k)
+        fewshot_ms = t_fewshot.elapsed_ms
+
+        # Step 4: prompt with the linked (or full) schema and the examples.
         messages = build_messages(
             dialect=dialect,
             schema_text=serialize_schema(schema, linking.tables if linking.applied else None),
+            examples=examples,
             question=question,
             unanswerable=cfg.unanswerable_enabled,
             today=self._today() if cfg.include_date else None,
@@ -198,8 +211,10 @@ class Pipeline:
                 truncated=exec_result.truncated if exec_result else False,
                 attempts=attempts,
                 linking=Linking(mode=linking.mode, applied=linking.applied, tables=linking.tables),
+                few_shot_ids=tuple(e.id for e in examples),
                 timings=Timings(
                     linking_ms=linking_ms,
+                    fewshot_ms=fewshot_ms,
                     pacing_ms=chat.pacing_ms,
                     generation_ms=generation_ms,
                     validation_ms=validation_ms,

@@ -28,6 +28,7 @@ from sqlglot import exp
 
 from qm_engine.config import EngineConfig, LinkingMode
 from qm_engine.execution.sqlite import SqliteExecutor
+from qm_engine.fewshot import FewShotPool, FewShotSelector, load_spider_train_pool
 from qm_engine.llm.client import LLMClient, LLMError
 from qm_engine.llm.embeddings import Embedder, EmbeddingError
 from qm_engine.observability import get_logger
@@ -63,6 +64,7 @@ RESUME_KEYS = (
     "flags",
     "llm",
     "embedding",
+    "few_shot_pool",
     "git_sha",
     "git_dirty",
     "spider_manifest_hash",
@@ -86,6 +88,7 @@ class RunSpec:
     linking_mode: LinkingMode = "off"
     linking_top_k: int = 5  # design default; A1/A4 use 3 (design §10.5 v0.7)
     few_shot: bool = False
+    few_shot_k: int = 3  # design §6.6 default
     self_correction: bool = False
     max_corrections: int = 2
 
@@ -177,6 +180,7 @@ def eval_config(base: EngineConfig, spec: RunSpec | None = None) -> EngineConfig
             "linking_mode": spec_techniques.linking_mode,
             "linking_top_k": spec_techniques.linking_top_k,
             "few_shot_enabled": spec_techniques.few_shot,
+            "few_shot_k": spec_techniques.few_shot_k,
             "self_correction_enabled": spec_techniques.self_correction,
             "max_corrections": spec_techniques.max_corrections,
         }
@@ -184,7 +188,11 @@ def eval_config(base: EngineConfig, spec: RunSpec | None = None) -> EngineConfig
 
 
 def build_config_record(
-    spec: RunSpec, cfg: EngineConfig, git: GitInfo, started_at: datetime
+    spec: RunSpec,
+    cfg: EngineConfig,
+    git: GitInfo,
+    started_at: datetime,
+    pool: FewShotPool | None = None,
 ) -> dict[str, object]:
     return {
         "tag": spec.tag,
@@ -199,6 +207,7 @@ def build_config_record(
             "linking_mode": cfg.linking_mode,
             "linking_top_k": cfg.linking_top_k,
             "few_shot_enabled": cfg.few_shot_enabled,
+            "few_shot_k": cfg.few_shot_k,
             "self_correction_enabled": cfg.self_correction_enabled,
             "max_corrections": cfg.max_corrections,
             "unanswerable_enabled": cfg.unanswerable_enabled,
@@ -217,8 +226,13 @@ def build_config_record(
         "embedding": {
             "model": cfg.embed_model,
             "base_url_host": urlsplit(cfg.embed_base_url).netloc,
-            "used": cfg.linking_mode != "off",
+            "used": cfg.linking_mode != "off" or cfg.few_shot_enabled,
         },
+        "few_shot_pool": (
+            {"source": pool.source, "sha256": pool.sha256, "n_examples": len(pool.examples)}
+            if pool is not None
+            else None
+        ),
         "versions": {
             "qm_engine": version("qm-engine"),
             "sqlglot": version("sqlglot"),
@@ -435,6 +449,15 @@ class EvalRunner:
         self.cfg = eval_config(base_cfg, spec)
         self.llm = llm
         self.embedder = embedder
+        # Eval pool = Spider train only (design D4); the loader refuses dev by name.
+        self.pool = (
+            load_spider_train_pool(spec.data_root / "train_spider.json") if spec.few_shot else None
+        )
+        self.fewshot: FewShotSelector | None = None
+        if self.pool is not None:
+            if embedder is None:
+                raise ValueError("few-shot needs an embedder")
+            self.fewshot = FewShotSelector(self.pool, embedder, cache_dir=self.cfg.cache_dir)
         self.runs_dir = runs_dir
         self.repo_dir = repo_dir or Path(__file__).resolve().parents[2]
         self._now = now
@@ -447,7 +470,7 @@ class EvalRunner:
         return self._schemas[db_id]
 
     def _config_record(self, started: datetime) -> dict[str, object]:
-        return build_config_record(self.spec, self.cfg, git_info(self.repo_dir), started)
+        return build_config_record(self.spec, self.cfg, git_info(self.repo_dir), started, self.pool)
 
     def create_run_dir(self) -> Path:
         started = self._now()
@@ -508,10 +531,22 @@ class EvalRunner:
         examples = {ex.question_id: ex for ex in load_split(spec.data_root, spec.split)}
         todo = [examples[q] for q in spec.question_ids if q not in done]
         _log.info("eval_start", run_dir=str(run_dir), todo=len(todo), done=len(done))
+        if self.fewshot is not None and todo:
+            try:
+                await self.fewshot.warm_up()  # one-off pool embedding, outside question timings
+            except EmbeddingError as e:
+                wrapped = LLMError("LLM_UNAVAILABLE", f"embedding service: {e}")
+                raise RunInterrupted(run_dir, todo[0].question_id, wrapped) from e
 
         for i, ex in enumerate(todo, 1):
             db = db_path(spec.data_root, ex.db_id)
-            pipeline = Pipeline(self.cfg, self.llm, SqliteExecutor(db), embedder=self.embedder)
+            pipeline = Pipeline(
+                self.cfg,
+                self.llm,
+                SqliteExecutor(db),
+                embedder=self.embedder,
+                fewshot=self.fewshot,
+            )
             res = await self._run_question(pipeline, ex, run_dir)
             pred = res.sql if res.status == "success" else None
             score = await asyncio.to_thread(
