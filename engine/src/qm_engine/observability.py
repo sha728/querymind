@@ -1,11 +1,12 @@
 """Structured JSON logging, correlation-ID context and stage timers (design §11)."""
 
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import TracebackType
-from typing import Self, TextIO
+from typing import Literal, Self, TextIO
 
 import structlog
 from structlog.typing import EventDict, FilteringBoundLogger, WrappedLogger
@@ -50,11 +51,38 @@ def _redact_processor(_: WrappedLogger, __: str, event: EventDict) -> EventDict:
     return {k: REDACTED if _is_sensitive(k) else _redact(v) for k, v in event.items()}
 
 
-def configure_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
+class _CurrentStreamLogger:
+    """Writes each line to whatever ``sys.stdout``/``sys.stderr`` is *at write time*.
+
+    Binding the stream object at configure time breaks when it is later replaced or closed
+    (e.g. pytest's output capture).
+    """
+
+    def __init__(self, target: Literal["stdout", "stderr"]) -> None:
+        self._target = target
+
+    def msg(self, message: str) -> None:
+        print(message, file=getattr(sys, self._target), flush=True)
+
+    log = debug = info = warn = warning = error = critical = exception = fatal = msg
+
+
+def configure_logging(
+    level: str = "INFO",
+    stream: TextIO | None = None,
+    *,
+    target: Literal["stdout", "stderr"] = "stdout",
+) -> None:
     """Configure structlog to write one JSON object per line.
 
-    With ``stream=None`` each line goes to the *current* ``sys.stdout``.
+    Lines go to ``stream`` if given, otherwise to the *current* ``sys.stdout`` or
+    ``sys.stderr`` (``target``), looked up at each write.
     """
+    factory = (
+        structlog.PrintLoggerFactory(file=stream)
+        if stream is not None
+        else (lambda *_: _CurrentStreamLogger(target))
+    )
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
@@ -66,7 +94,7 @@ def configure_logging(level: str = "INFO", stream: TextIO | None = None) -> None
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
-        logger_factory=structlog.PrintLoggerFactory(file=stream),
+        logger_factory=factory,
         cache_logger_on_first_use=False,
     )
 

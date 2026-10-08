@@ -1,0 +1,24 @@
+# List prices used by `qm-eval cost` (design §11.4, M5). USD per million tokens.
+# Runs on a provider's free tier cost $0; these figures give the "estimate at list price".
+# Re-check source_url and update retrieved_on before publishing any cost figure.
+
+- provider: cerebras
+  model: gpt-oss-120b
+  input_usd_per_mtok: 0.35
+  output_usd_per_mtok: 0.75
+  source_url: https://www.cerebras.ai/pricing
+  retrieved_on: 2026-10-08
+
+- provider: cerebras
+  model: qwen-3.8-27b
+  input_usd_per_mtok: 0.99
+  output_usd_per_mtok: 1.49
+  source_url: https://www.cerebras.ai/pricing
+  retrieved_on: 2026-10-08
+
+- provider: groq
+  model: openai/gpt-oss-120b
+  input_usd_per_mtok: 0.15
+  output_usd_per_mtok: 0.60
+  source_url: https://console.groq.com/docs/model/openai/gpt-oss-120b
+  retrieved_on: 2026-10-08

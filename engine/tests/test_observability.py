@@ -102,3 +102,11 @@ def test_timer_records_even_when_block_raises() -> None:
         time.sleep(0.01)
         raise RuntimeError("boom")
     assert t.elapsed_ms >= 5
+
+
+def test_stderr_target_follows_the_current_stream(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(target="stderr")
+    get_logger().info("to_stderr")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["event"] == "to_stderr"

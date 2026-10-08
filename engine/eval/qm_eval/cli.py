@@ -2,10 +2,11 @@
 
     qm-eval run (--subset N | --full) [--seed 42] [--tag NAME] [--timeout-ms 30000]
                 [--resume RUN_DIR] [--data-root DIR] [--manifest FILE] [--runs-dir DIR]
+    qm-eval cost RUN_DIR [--pricing FILE]
 
 Provider, model, reasoning effort and pacing come from the same environment / .env keys as
 the product (design E9, E11). `--linking`, `--few-shot` and `--self-correction` are added with
-their features (T22-T24); `compare` and `cost` with T25 and T18.
+their features (T22-T24); `compare` with T25.
 
 Exit codes: 0 finished, 1 refused (manifest or resume mismatch), 2 usage error,
 75 interrupted by an LLM rate limit or outage (continue with --resume).
@@ -21,6 +22,7 @@ from pathlib import Path
 from qm_engine.config import EngineConfig
 from qm_engine.llm.client import LLMClient, OpenAICompatibleClient
 from qm_engine.observability import configure_logging
+from qm_eval.cost import DEFAULT_PRICING, compute_cost, format_report, load_pricing
 from qm_eval.runner import (
     DEFAULT_RUNS_DIR,
     EvalRunner,
@@ -64,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     run.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     run.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
+
+    cost = sub.add_parser("cost", help="token totals and list-price cost per 1,000 questions")
+    cost.add_argument("run_dir", type=Path)
+    cost.add_argument("--pricing", type=Path, default=DEFAULT_PRICING)
     return parser
 
 
@@ -109,7 +115,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run" and args.subset is not None and args.subset <= 0:
         parser.error("--subset must be a positive integer")
-    configure_logging(stream=sys.stderr)
+    configure_logging(target="stderr")  # stdout carries the result
+    if args.command == "cost":
+        try:
+            print(format_report(compute_cost(args.run_dir, load_pricing(args.pricing))))
+        except (KeyError, FileNotFoundError) as e:
+            print(f"Refused: {e}", file=sys.stderr)
+            return EXIT_REFUSED
+        return EXIT_OK
     try:
         return asyncio.run(_run(args))
     except RunInterrupted as e:
