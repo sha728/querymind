@@ -1,9 +1,9 @@
 """The single orchestration path shared by the product and the evaluation harness (design §6).
 
-T13 implements the zero-shot path: steps 1, 4-8 and 12 of design §6.2. Schema linking (step 2,
-T22), few-shot selection (step 3, T23), self-correction (step 9, T24), charts (step 10, T30)
-and summaries (step 11, T31) are added by later tasks. Until T24, a failed attempt ends the
-request even when ``self_correction_enabled`` is set.
+T13 implements the zero-shot path: steps 1, 4-8 and 12 of design §6.2; T22 adds schema
+linking (step 2). Few-shot selection (step 3, T23), self-correction (step 9, T24), charts
+(step 10, T30) and summaries (step 11, T31) are added by later tasks. Until T24, a failed
+attempt ends the request even when ``self_correction_enabled`` is set.
 
 LLM transport errors (``LLMError``) are not turned into a status: they propagate so the API can
 return 503 and the harness can apply its rate-limit rules (design §10.3, §12).
@@ -17,7 +17,9 @@ from typing import Literal
 from qm_engine.config import EngineConfig
 from qm_engine.execution.base import ExecResult, ExecutionError, Executor, ResultColumn
 from qm_engine.extract import extract
+from qm_engine.linking import SchemaLinker
 from qm_engine.llm.client import ChatResult, LLMClient
+from qm_engine.llm.embeddings import Embedder
 from qm_engine.observability import Timer, get_logger
 from qm_engine.prompts import build_messages
 from qm_engine.safety.validator import validate
@@ -108,11 +110,13 @@ class Pipeline:
         llm: LLMClient,
         executor: Executor,
         *,
+        embedder: Embedder | None = None,
         today: Callable[[], date] = date.today,
     ) -> None:
         self.cfg = cfg
         self.llm = llm
         self.executor = executor
+        self.linker = SchemaLinker(cfg, embedder)
         self._today = today
 
     async def run(self, question: str, schema: SchemaSnapshot) -> PipelineResult:
@@ -144,10 +148,15 @@ class Pipeline:
         cfg = self.cfg
         dialect = schema.dialect
 
-        # Steps 2-4: full schema (linking arrives in T22), no examples (T23), prompt.
+        # Step 2: schema linking (design §6.3).
+        with Timer() as t_link:
+            linking = await self.linker.link(question, schema)
+        linking_ms = t_link.elapsed_ms
+
+        # Steps 3-4: no examples yet (T23); prompt with the linked (or full) schema.
         messages = build_messages(
             dialect=dialect,
-            schema_text=serialize_schema(schema),
+            schema_text=serialize_schema(schema, linking.tables if linking.applied else None),
             question=question,
             unanswerable=cfg.unanswerable_enabled,
             today=self._today() if cfg.include_date else None,
@@ -188,8 +197,9 @@ class Pipeline:
                 rows=exec_result.rows if exec_result else [],
                 truncated=exec_result.truncated if exec_result else False,
                 attempts=attempts,
-                linking=Linking(mode=cfg.linking_mode, applied=False),
+                linking=Linking(mode=linking.mode, applied=linking.applied, tables=linking.tables),
                 timings=Timings(
+                    linking_ms=linking_ms,
                     pacing_ms=chat.pacing_ms,
                     generation_ms=generation_ms,
                     validation_ms=validation_ms,

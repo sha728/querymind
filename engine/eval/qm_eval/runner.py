@@ -23,9 +23,13 @@ from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import sqlglot
+from sqlglot import exp
+
 from qm_engine.config import EngineConfig, LinkingMode
 from qm_engine.execution.sqlite import SqliteExecutor
 from qm_engine.llm.client import LLMClient, LLMError
+from qm_engine.llm.embeddings import Embedder, EmbeddingError
 from qm_engine.observability import get_logger
 from qm_engine.pipeline import Pipeline, PipelineResult
 from qm_engine.schema.introspect_sqlite import introspect_sqlite
@@ -58,6 +62,7 @@ RESUME_KEYS = (
     "timeout_ms",
     "flags",
     "llm",
+    "embedding",
     "git_sha",
     "git_dirty",
     "spider_manifest_hash",
@@ -206,6 +211,11 @@ def build_config_record(
             "min_interval_s": cfg.min_interval_s,
             "temperature": 0,
         },
+        "embedding": {
+            "model": cfg.embed_model,
+            "base_url_host": urlsplit(cfg.embed_base_url).netloc,
+            "used": cfg.linking_mode != "off",
+        },
         "versions": {
             "qm_engine": version("qm-engine"),
             "sqlglot": version("sqlglot"),
@@ -216,6 +226,26 @@ def build_config_record(
         "spider_manifest_hash": manifest_hash(spec.manifest),
         "started_at": started_at.isoformat(),
     }
+
+
+def gold_tables(gold_sql: str) -> set[str] | None:
+    """Lower-cased base tables referenced by a gold query (CTE names excluded)."""
+    try:
+        tree = sqlglot.parse_one(gold_sql, read="sqlite")
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
+        return None
+    ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    return {
+        t.name.lower() for t in tree.find_all(exp.Table) if t.name and t.name.lower() not in ctes
+    }
+
+
+def linking_recall(gold_sql: str, linked: Sequence[str]) -> float | None:
+    """|gold tables ∩ linked tables| / |gold tables| (design §6.3 step 7); None if unknown."""
+    gold = gold_tables(gold_sql)
+    if not gold:
+        return None
+    return round(len(gold & {t.lower() for t in linked}) / len(gold), 4)
 
 
 def _safe_hardness(db: Path, gold_sql: str) -> str | None:
@@ -370,10 +400,12 @@ class EvalRunner:
         repo_dir: Path | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        embedder: Embedder | None = None,
     ) -> None:
         self.spec = spec
         self.cfg = eval_config(base_cfg, spec)
         self.llm = llm
+        self.embedder = embedder
         self.runs_dir = runs_dir
         self.repo_dir = repo_dir or Path(__file__).resolve().parents[2]
         self._now = now
@@ -415,6 +447,10 @@ class EvalRunner:
         while True:
             try:
                 return await pipeline.run(ex.question, self._schema(ex.db_id))
+            except EmbeddingError as e:
+                # The local embedding server is down: stop resumably, like an LLM outage.
+                wrapped = LLMError("LLM_UNAVAILABLE", f"embedding service: {e}")
+                raise RunInterrupted(run_dir, ex.question_id, wrapped) from e
             except LLMError as e:
                 hint = e.retry_after_s
                 short = e.code == "LLM_RATE_LIMITED" and hint is not None and hint <= MAX_WAIT_S
@@ -446,7 +482,7 @@ class EvalRunner:
 
         for i, ex in enumerate(todo, 1):
             db = db_path(spec.data_root, ex.db_id)
-            pipeline = Pipeline(self.cfg, self.llm, SqliteExecutor(db))
+            pipeline = Pipeline(self.cfg, self.llm, SqliteExecutor(db), embedder=self.embedder)
             res = await self._run_question(pipeline, ex, run_dir)
             pred = res.sql if res.status == "success" else None
             score = await asyncio.to_thread(
@@ -454,7 +490,15 @@ class EvalRunner:
             )
             level = await asyncio.to_thread(_safe_hardness, db, ex.query)
             _append_line(
-                results_path, result_record(ex, level, res, score.correct, score.gold_error)
+                results_path,
+                result_record(
+                    ex,
+                    level,
+                    res,
+                    score.correct,
+                    score.gold_error,
+                    linking_recall(ex.query, res.linking.tables) if res.linking.applied else None,
+                ),
             )
             _log.info(
                 "eval_question",

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fakes import ScriptedLLM
+from fakes import FakeEmbedder, ScriptedLLM
 from qm_engine.config import EngineConfig
 from qm_engine.llm.client import LLMError
 from qm_eval import cli, runner
@@ -29,10 +29,19 @@ class Env:
         self.llm = ScriptedLLM()
         monkeypatch.setattr(cli, "make_config", self._config)
         monkeypatch.setattr(cli, "make_llm", lambda cfg: self.llm)
+        self.embedder = FakeEmbedder()
+        self.embedder_created = 0
+
+        def make_embedder(cfg: EngineConfig) -> FakeEmbedder:
+            self.embedder_created += 1
+            return self.embedder
+
+        monkeypatch.setattr(cli, "make_embedder", make_embedder)
 
     def _config(self) -> EngineConfig:
         base: dict[str, object] = {
             "cerebras_api_key": "k",
+            "cache_dir": self.root.parent / "cache",
             "self_correction_enabled": False,
             "linking_mode": "off",
             "few_shot_enabled": False,
@@ -223,3 +232,36 @@ def test_second_process_on_same_run_is_refused(
     err = capsys.readouterr().err
     assert "locked by another qm-eval" in err and LOCK_NAME in err
     assert len(read_results(run_dir / "results.jsonl")) == 1
+
+
+# --- schema linking (T22) ---
+
+
+def test_linking_on_records_tables_and_recall(env: Env) -> None:
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3", "--linking", "on")) == 0
+    run_dir = env.run_dir()
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["flags"]["linking_mode"] == "on"
+    assert config["embedding"]["used"] is True
+    rows = read_results(run_dir / "results.jsonl")
+    for r in rows:
+        assert r["linking_applied"] is True
+        assert r["linked_tables"]
+        gold = runner.gold_tables(r["gold_sql"])
+        assert gold is not None
+        linked = {t.lower() for t in r["linked_tables"]}
+        assert r["linking_recall"] == round(len(gold & linked) / len(gold), 4)
+    assert env.embedder_created == 1
+
+
+def test_linking_defaults_off_and_needs_no_embedder(env: Env) -> None:
+    env.cfg_overrides = {"linking_mode": "auto"}  # a product default must not apply
+    env.llm = ScriptedLLM(REPLY, REPLY, REPLY)
+    assert cli.main(env.args("--subset", "3")) == 0
+    config = json.loads((env.run_dir() / "config.json").read_text(encoding="utf-8"))
+    assert config["flags"]["linking_mode"] == "off"
+    assert config["embedding"]["used"] is False
+    rows = read_results(env.run_dir() / "results.jsonl")
+    assert all(r["linking_applied"] is False and r["linking_recall"] is None for r in rows)
+    assert env.embedder_created == 0

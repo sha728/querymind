@@ -21,6 +21,7 @@ from pathlib import Path
 
 from qm_engine.config import EngineConfig
 from qm_engine.llm.client import LLMClient, OpenAICompatibleClient
+from qm_engine.llm.embeddings import Embedder, OllamaEmbedder
 from qm_engine.observability import configure_logging
 from qm_eval.cost import DEFAULT_PRICING, compute_cost, format_report, load_pricing
 from qm_eval.runner import (
@@ -51,6 +52,10 @@ def make_llm(cfg: EngineConfig) -> LLMClient:
     return OpenAICompatibleClient(cfg)
 
 
+def make_embedder(cfg: EngineConfig) -> Embedder:
+    return OllamaEmbedder(cfg)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qm-eval", description="QueryMind Spider evaluation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -63,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--split", choices=["dev"], default="dev")
     run.add_argument("--tag", default="run", help="becomes part of the run directory name")
     run.add_argument("--timeout-ms", type=int, default=30_000, help="per-query SQLite timeout")
+    run.add_argument(
+        "--linking",
+        choices=["off", "on", "auto"],
+        default="off",
+        help="schema linking (design 6.3); 'on' forces it for ablations (default off)",
+    )
     run.add_argument("--resume", type=Path, metavar="RUN_DIR", help="continue an interrupted run")
     run.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     run.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -86,21 +97,25 @@ def _spec(args: argparse.Namespace) -> RunSpec:
         tag=args.tag,
         timeout_ms=args.timeout_ms,
         split=args.split,
+        linking_mode=args.linking,
     )
 
 
 async def _run(args: argparse.Namespace) -> int:
     cfg = make_config()
     llm = make_llm(cfg)
+    spec = _spec(args)
+    embedder = make_embedder(cfg) if spec.linking_mode != "off" else None
     try:
-        runner = EvalRunner(_spec(args), cfg, llm, runs_dir=args.runs_dir)
+        runner = EvalRunner(spec, cfg, llm, runs_dir=args.runs_dir, embedder=embedder)
         if args.resume is not None:
             runner.check_resumable(args.resume)
         run_dir = await runner.run(args.resume)
     finally:
-        aclose = getattr(llm, "aclose", None)
-        if aclose is not None:
-            await aclose()
+        for client in (llm, embedder):
+            aclose = getattr(client, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     print(f"run dir: {run_dir}")

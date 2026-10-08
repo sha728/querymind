@@ -319,3 +319,27 @@ async def test_lock_is_released_after_interruption(spec: RunSpec, tmp_path: Path
     with pytest.raises(RunInterrupted):
         await r.run(run_dir)
     assert not (run_dir / LOCK_NAME).exists()
+
+
+# --- linking recall (design §6.3 step 7) ---
+
+
+def test_gold_tables_excludes_ctes_and_lowercases() -> None:
+    from qm_eval.runner import gold_tables
+
+    assert gold_tables("SELECT T1.name FROM Singer AS T1 JOIN concert AS T2 ON 1") == {
+        "singer",
+        "concert",
+    }
+    assert gold_tables("WITH x AS (SELECT * FROM a) SELECT * FROM x JOIN b") == {"a", "b"}
+    assert gold_tables("SELECT FROM WHERE (") is None
+
+
+def test_linking_recall() -> None:
+    from qm_eval.runner import linking_recall
+
+    gold = "SELECT * FROM singer JOIN concert ON 1"
+    assert linking_recall(gold, ["Singer", "concert", "stadium"]) == 1.0
+    assert linking_recall(gold, ["singer"]) == 0.5
+    assert linking_recall(gold, []) == 0.0
+    assert linking_recall("SELECT 1", ["singer"]) is None  # no gold tables
