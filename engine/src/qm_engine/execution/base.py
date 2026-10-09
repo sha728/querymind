@@ -39,6 +39,17 @@ class ExecutionError(Exception):
         return self.code != "READ_ONLY_VIOLATION"
 
 
+class TargetDBUnavailable(Exception):
+    """The database could not be reached (no connection, pool timeout, server shutting down).
+
+    Not an ``ExecutionError``: the query is not at fault, so the pipeline must not ask the model
+    to correct it. It propagates to the API, which returns 503 ``TARGET_DB_UNAVAILABLE``
+    (design §12).
+    """
+
+    code = "TARGET_DB_UNAVAILABLE"
+
+
 class Executor(Protocol):
     async def execute(self, sql: str, row_cap: int | None, timeout_ms: int) -> ExecResult:
         """Run one validated SELECT. Raises ``ExecutionError``."""

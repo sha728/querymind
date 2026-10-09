@@ -43,6 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "target_db_name": "northwind",
     "target_db_ro_user": "querymind_ro",
     "target_db_ro_password": None,
+    "engine_internal_key": None,
 }
 
 

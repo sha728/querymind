@@ -112,6 +112,14 @@ class OpenAICompatibleClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    async def ping(self) -> bool:
+        """Cheap reachability check for /health: ``GET /models``, not a completion (§4.3)."""
+        try:
+            response = await self._http.get("/models", timeout=5.0)
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200
+
     def _body(self, messages: list[Message], max_tokens: int) -> dict[str, object]:
         body: dict[str, object] = {
             "model": self.cfg.llm_model,

@@ -11,10 +11,16 @@ from decimal import Decimal
 
 import psycopg
 from psycopg import sql
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from qm_engine.config import EngineConfig
-from qm_engine.execution.base import ExecErrorCode, ExecResult, ExecutionError, ResultColumn
+from qm_engine.execution.base import (
+    ExecErrorCode,
+    ExecResult,
+    ExecutionError,
+    ResultColumn,
+    TargetDBUnavailable,
+)
 
 CONNECT_TIMEOUT_S = 10
 
@@ -83,6 +89,9 @@ _PG_TYPE_NORM: dict[str, str] = {
     "timestamptz": "timestamp",
 }
 
+# SQLSTATEs (besides class 08, connection exception) meaning the server is unavailable.
+_UNAVAILABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})  # admin/crash shutdown, starting
+
 IDLE_IN_TRANSACTION_MARGIN_MS = 5000
 
 
@@ -112,6 +121,17 @@ def _message(e: psycopg.Error) -> str:
     return " ".join(parts)
 
 
+def _is_unavailable(e: psycopg.Error) -> bool:
+    """Connection-level failures, as opposed to errors in the query itself."""
+    if isinstance(e, PoolTimeout):
+        return True
+    state = e.sqlstate or ""
+    if state.startswith("08") or state in _UNAVAILABLE_SQLSTATES:
+        return True
+    # A dropped connection has no SQLSTATE at all.
+    return isinstance(e, psycopg.OperationalError) and not state
+
+
 class PostgresExecutor:
     """Runs one validated SELECT per call on a pooled read-only connection.
 
@@ -133,8 +153,10 @@ class PostgresExecutor:
     async def _configure(conn: psycopg.AsyncConnection) -> None:
         await conn.set_read_only(True)
 
-    async def open(self) -> None:
-        await self.pool.open(wait=True, timeout=CONNECT_TIMEOUT_S)
+    async def open(self, *, wait: bool = True) -> None:
+        """Open the pool. ``wait=False`` returns at once and connects in the background (the
+        API starts even while the database is down, and reports ``degraded``)."""
+        await self.pool.open(wait=wait, timeout=CONNECT_TIMEOUT_S)
 
     async def close(self) -> None:
         await self.pool.close()
@@ -160,6 +182,8 @@ class PostgresExecutor:
                     description = cur.description or []
                     columns = tuple(_result_column(d.name, d.type_code, conn) for d in description)
         except psycopg.Error as e:
+            if _is_unavailable(e):
+                raise TargetDBUnavailable(str(e).strip() or type(e).__name__) from e
             code = _SQLSTATE_CODES.get(e.sqlstate or "", "EXECUTION_ERROR")
             raise ExecutionError(code, _message(e)) from e
 

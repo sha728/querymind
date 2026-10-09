@@ -78,6 +78,11 @@ class EngineConfig(BaseSettings):
     embed_batch_size: int = Field(default=64, gt=0)
     cache_dir: Path = Field(default=Path(".engine_cache"), validation_alias="ENGINE_CACHE_DIR")
 
+    # --- Engine trust (design §4.3, R8.1): shared secret with the .NET API ---
+    engine_internal_key: SecretStr | None = Field(
+        default=None, validation_alias="ENGINE_INTERNAL_KEY"
+    )
+
     # --- Target DB, read-only role (R1.1, R4.1) ---
     target_db_host: str = Field(default="target-db", validation_alias="TARGET_DB_HOST")
     target_db_port: int = Field(default=5432, gt=0, lt=65536, validation_alias="TARGET_DB_PORT")

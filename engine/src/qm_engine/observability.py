@@ -22,6 +22,8 @@ _SENSITIVE_KEYS = frozenset(
 _SENSITIVE_SUFFIXES = ("_password", "_api_key", "_token", "_secret", "_internal_key")
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+# Forwarded by the .NET API as X-User-Id: log context only, never authorization (design §4.3).
+user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
 
 
 def _is_sensitive(key: str) -> bool:
@@ -44,6 +46,9 @@ def _add_service(_: WrappedLogger, __: str, event: EventDict) -> EventDict:
 
 def _add_correlation_id(_: WrappedLogger, __: str, event: EventDict) -> EventDict:
     event["correlation_id"] = correlation_id_var.get()
+    user_id = user_id_var.get()
+    if user_id is not None:
+        event["user_id"] = user_id
     return event
 
 
@@ -104,12 +109,15 @@ def get_logger() -> FilteringBoundLogger:
 
 
 @contextmanager
-def correlation_context(correlation_id: str) -> Iterator[None]:
-    """Bind a correlation ID to every log line emitted inside the block (R10.1)."""
+def correlation_context(correlation_id: str, user_id: str | None = None) -> Iterator[None]:
+    """Bind a correlation ID (and the caller's user ID, if known) to every log line emitted
+    inside the block (R10.1, design §11.2)."""
     token = correlation_id_var.set(correlation_id)
+    user_token = user_id_var.set(user_id)
     try:
         yield
     finally:
+        user_id_var.reset(user_token)
         correlation_id_var.reset(token)
 
 

@@ -18,6 +18,8 @@ dependencies = [
     "numpy==2.4.6",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
+    "fastapi==0.143.0",
+    "uvicorn==0.54.0",
     # Vendored Spider evaluation (eval/qm_eval/vendor/test_suite) needs these.
     "nltk==3.10.3",
     "sqlparse==0.6.0",
@@ -34,6 +36,7 @@ dev = [
 [project.scripts]
 # The CLI module (qm_eval.cli) is added in T17.
 qm-eval = "qm_eval.cli:main"
+qm-engine = "qm_engine.api:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qm_engine", "eval/qm_eval"]
