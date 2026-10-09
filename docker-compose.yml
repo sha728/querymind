@@ -1,4 +1,4 @@
-# QueryMind services (design §14.1). Built up task by task: target-db (T27) so far.
+# QueryMind services (design §14.1). Built up task by task: target-db (T27), engine (T34).
 # Values come from .env (copy .env.example). Container-network addresses are set here (design E9).
 
 services:
@@ -22,5 +22,32 @@ services:
       timeout: 3s
       retries: 20
 
+  engine:
+    build: ./engine
+    env_file: .env
+    environment:
+      # Container-network addresses override the host values in .env (design §14.1, E9).
+      # Hosted LLM providers (cerebras, groq) need no override; Ollama runs on the host.
+      QM_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      QM_EMBED_BASE_URL: http://host.docker.internal:11434/v1
+      TARGET_DB_HOST: target-db
+      TARGET_DB_PORT: "5432"
+      ENGINE_CACHE_DIR: /app/.engine_cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # No published port: only the api service (and `docker compose exec`) reach it.
+    volumes:
+      - engine-cache:/app/.engine_cache
+    depends_on:
+      target-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
 volumes:
   target-db-data:
+  engine-cache:
