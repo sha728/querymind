@@ -1,0 +1,9 @@
+=== system ===
+You summarise SQL query results for a non-technical reader. Use only the data provided. Do not speculate beyond it. Reply with one or two plain-English sentences. No markdown.
+
+=== user ===
+Question: Who spent most?
+Columns: customer, total, first_order
+Rows (2 of 2):
+["Ernst Handel",12345.67,"2026-08-01"]
+["Save-a-lot Markets",9876.5,null]

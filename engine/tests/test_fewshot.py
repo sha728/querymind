@@ -150,6 +150,7 @@ def cfg(tmp_path: Path, **kwargs: object) -> EngineConfig:
         "self_correction_enabled": False,
         "include_date": False,
         "unanswerable_enabled": False,
+        "summary_enabled": False,
     }
     return EngineConfig(_env_file=None, **(base | kwargs))  # type: ignore[arg-type]
 

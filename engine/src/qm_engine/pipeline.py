@@ -1,8 +1,8 @@
 """The single orchestration path shared by the product and the evaluation harness (design §6).
 
-Steps 1-9 and 12 of design §6.2: input checks, schema linking (T22), few-shot selection (T23),
-prompt, generation, extraction, validation, execution, self-correction (T24) and the chart
-recommendation (step 10, T30). Summaries (step 11, T31) are added later.
+Steps 1-12 of design §6.2: input checks, schema linking (T22), few-shot selection (T23), prompt,
+generation, extraction, validation, execution, self-correction (T24), the chart recommendation
+(step 10, T30) and the result summary (step 11, T31).
 
 LLM transport errors (``LLMError``) are not turned into a status: they propagate so the API can
 return 503 and the harness can apply its rate-limit rules (design §10.3, §12).
@@ -26,6 +26,7 @@ from qm_engine.prompts import Example, build_messages, correction_turns
 from qm_engine.safety.validator import validate
 from qm_engine.schema.models import Dialect, SchemaSnapshot
 from qm_engine.schema.serialize import serialize_schema
+from qm_engine.summary import SummaryOutcome, summarise
 
 MAX_QUESTION_CHARS = 1000
 MAX_STORED_ERROR_CHARS = 2000  # query_attempts.error (design §5.1)
@@ -94,6 +95,7 @@ class PipelineResult:
     timings: Timings = Timings()
     usage: Usage | None = None
     chart: ChartSpec | None = None  # set on success (design §9)
+    summary: str | None = None  # set on success when enabled and the call worked (§8.3)
 
     @property
     def row_count(self) -> int:
@@ -202,6 +204,7 @@ class Pipeline:
             sql: str | None,
             message: str | None,
             exec_result: ExecResult | None = None,
+            summary: SummaryOutcome | None = None,
         ) -> PipelineResult:
             chart = (
                 recommend_chart(exec_result.columns, exec_result.rows)
@@ -210,6 +213,7 @@ class Pipeline:
             )
             return PipelineResult(
                 chart=chart,
+                summary=summary.text if summary else None,
                 status=status,
                 sql=sql,
                 message=message,
@@ -222,15 +226,22 @@ class Pipeline:
                 timings=Timings(
                     linking_ms=t_link.elapsed_ms,
                     fewshot_ms=t_fewshot.elapsed_ms,
-                    pacing_ms=totals["pacing"],
+                    pacing_ms=totals["pacing"] + (summary.pacing_ms if summary else 0),
                     generation_ms=totals["generation"],
                     validation_ms=totals["validation"],
                     execution_ms=totals["execution"],
+                    summary_ms=summary.latency_ms if summary else 0,
                 ),
                 usage=Usage(
                     model=model,
-                    prompt_tokens=_sum_tokens([a.prompt_tokens for a in attempts]),
-                    completion_tokens=_sum_tokens([a.completion_tokens for a in attempts]),
+                    prompt_tokens=_sum_tokens(
+                        [a.prompt_tokens for a in attempts]
+                        + [summary.prompt_tokens if summary else None]
+                    ),
+                    completion_tokens=_sum_tokens(
+                        [a.completion_tokens for a in attempts]
+                        + [summary.completion_tokens if summary else None]
+                    ),
                 ),
             )
 
@@ -258,9 +269,20 @@ class Pipeline:
             )
 
             if outcome.kind == "success":
-                # Step 10 (chart) runs in finish(); step 11 (summary) arrives in T31.
+                # Step 11: summary (design §8.3), only when enabled and rows came back.
+                # Step 10 (chart) runs in finish().
+                exec_result = outcome.exec_result
+                summary = (
+                    await summarise(self.llm, question, exec_result)
+                    if cfg.summary_enabled and exec_result is not None and exec_result.rows
+                    else None
+                )
                 return finish(
-                    "success", sql=outcome.sql, message=None, exec_result=outcome.exec_result
+                    "success",
+                    sql=outcome.sql,
+                    message=None,
+                    exec_result=exec_result,
+                    summary=summary,
                 )
             if outcome.kind == "cannot_answer":
                 return finish("cannot_answer", sql=None, message=outcome.message)

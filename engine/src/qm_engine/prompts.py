@@ -1,6 +1,6 @@
 """Prompt templates (design §8) and the pure function that renders them.
 
-Generation (§8.1) and correction (§8.2). The summary prompt (§8.3) is added in T31.
+Generation (§8.1) and correction (§8.2). The summary prompt (§8.3) lives in ``summary.py``.
 Snapshot tests pin the rendered text, so any wording change shows up as a reviewed diff.
 """
 

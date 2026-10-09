@@ -1,0 +1,27 @@
+=== system ===
+You summarise SQL query results for a non-technical reader. Use only the data provided. Do not speculate beyond it. Reply with one or two plain-English sentences. No markdown.
+
+=== user ===
+Question: Top?
+Columns: customer, total, first_order
+Rows (20 of 25; the result was cut off at the row limit, so more rows exist):
+["Customer 0",1000.5,"2026-01-15"]
+["Customer 1",999.5,"2026-02-15"]
+["Customer 2",998.5,"2026-03-15"]
+["Customer 3",997.5,"2026-04-15"]
+["Customer 4",996.5,"2026-05-15"]
+["Customer 5",995.5,"2026-06-15"]
+["Customer 6",994.5,"2026-07-15"]
+["Customer 7",993.5,"2026-08-15"]
+["Customer 8",992.5,"2026-09-15"]
+["Customer 9",991.5,"2026-01-15"]
+["Customer 10",990.5,"2026-02-15"]
+["Customer 11",989.5,"2026-03-15"]
+["Customer 12",988.5,"2026-04-15"]
+["Customer 13",987.5,"2026-05-15"]
+["Customer 14",986.5,"2026-06-15"]
+["Customer 15",985.5,"2026-07-15"]
+["Customer 16",984.5,"2026-08-15"]
+["Customer 17",983.5,"2026-09-15"]
+["Customer 18",982.5,"2026-01-15"]
+["Customer 19",981.5,"2026-02-15"]

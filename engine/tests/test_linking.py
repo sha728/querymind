@@ -43,6 +43,7 @@ def cfg(tmp_path: Path, **kwargs: object) -> EngineConfig:
         "cache_dir": tmp_path,
         "dialect": "sqlite",
         "few_shot_enabled": False,
+        "summary_enabled": False,
     }
     return EngineConfig(_env_file=None, **(base | kwargs))  # type: ignore[arg-type]
 
