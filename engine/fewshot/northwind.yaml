@@ -1,0 +1,283 @@
+# Curated few-shot examples for the product (design D4, §6.4, R2.3).
+# Each entry: {id, question, sql}. Every example must pass the safety validator and execute
+# against target-db (tests/integration/test_fewshot_northwind.py).
+# Order dates are shifted into 2024-2026 (db/target/init/03_date_shift.sql), so relative dates
+# resolve against CURRENT_DATE.
+
+# --- lookups and filters ---
+- id: nw-01
+  question: Which customers are based in Germany?
+  sql: |-
+    SELECT company_name, city
+    FROM customers
+    WHERE country = 'Germany'
+    ORDER BY company_name
+
+- id: nw-02
+  question: List the products that are out of stock but not discontinued.
+  sql: |-
+    SELECT product_name, units_on_order
+    FROM products
+    WHERE units_in_stock = 0 AND discontinued = 0
+    ORDER BY product_name
+
+- id: nw-03
+  question: Which employees report to Andrew Fuller?
+  sql: |-
+    SELECT e.first_name, e.last_name, e.title
+    FROM employees e
+    JOIN employees m ON m.employee_id = e.reports_to
+    WHERE m.first_name = 'Andrew' AND m.last_name = 'Fuller'
+    ORDER BY e.last_name
+
+# --- aggregation ---
+- id: nw-04
+  question: How many customers are there in each country?
+  sql: |-
+    SELECT country, count(*) AS customers
+    FROM customers
+    GROUP BY country
+    ORDER BY customers DESC, country
+
+- id: nw-05
+  question: What is the average unit price of products in each category?
+  sql: |-
+    SELECT c.category_name, round(avg(p.unit_price)::numeric, 2) AS avg_unit_price
+    FROM products p
+    JOIN categories c ON c.category_id = p.category_id
+    GROUP BY c.category_name
+    ORDER BY avg_unit_price DESC
+
+- id: nw-06
+  question: What is the total revenue of all orders?
+  sql: |-
+    SELECT round(sum(unit_price * quantity * (1 - discount))::numeric, 2) AS revenue
+    FROM order_details
+
+- id: nw-07
+  question: Which countries have more than 5 customers?
+  sql: |-
+    SELECT country, count(*) AS customers
+    FROM customers
+    GROUP BY country
+    HAVING count(*) > 5
+    ORDER BY customers DESC
+
+- id: nw-08
+  question: How many orders did each shipper deliver?
+  sql: |-
+    SELECT s.company_name AS shipper, count(o.order_id) AS orders
+    FROM shippers s
+    LEFT JOIN orders o ON o.ship_via = s.shipper_id
+    GROUP BY s.company_name
+    ORDER BY orders DESC
+
+# --- joins across several tables ---
+- id: nw-09
+  question: What is the revenue by product category?
+  sql: |-
+    SELECT c.category_name,
+           round(sum(od.unit_price * od.quantity * (1 - od.discount))::numeric, 2) AS revenue
+    FROM order_details od
+    JOIN products p ON p.product_id = od.product_id
+    JOIN categories c ON c.category_id = p.category_id
+    GROUP BY c.category_name
+    ORDER BY revenue DESC
+
+- id: nw-10
+  question: Which suppliers provide seafood products?
+  sql: |-
+    SELECT DISTINCT s.company_name, s.country
+    FROM suppliers s
+    JOIN products p ON p.supplier_id = s.supplier_id
+    JOIN categories c ON c.category_id = p.category_id
+    WHERE c.category_name = 'Seafood'
+    ORDER BY s.company_name
+
+- id: nw-11
+  question: Which employees cover territories in the Eastern region?
+  sql: |-
+    SELECT DISTINCT e.first_name, e.last_name
+    FROM employees e
+    JOIN employee_territories et ON et.employee_id = e.employee_id
+    JOIN territories t ON t.territory_id = et.territory_id
+    JOIN region r ON r.region_id = t.region_id
+    WHERE r.region_description = 'Eastern'
+    ORDER BY e.last_name
+
+- id: nw-12
+  question: Which customers have never placed an order?
+  sql: |-
+    SELECT c.company_name, c.country
+    FROM customers c
+    WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id)
+    ORDER BY c.company_name
+
+# --- top-N ---
+- id: nw-13
+  question: What are the 5 most expensive products?
+  sql: |-
+    SELECT product_name, unit_price
+    FROM products
+    ORDER BY unit_price DESC
+    LIMIT 5
+
+- id: nw-14
+  question: Who are the top 10 customers by total spend?
+  sql: |-
+    SELECT c.company_name,
+           round(sum(od.unit_price * od.quantity * (1 - od.discount))::numeric, 2) AS total_spent
+    FROM customers c
+    JOIN orders o ON o.customer_id = c.customer_id
+    JOIN order_details od ON od.order_id = o.order_id
+    GROUP BY c.company_name
+    ORDER BY total_spent DESC
+    LIMIT 10
+
+- id: nw-15
+  question: Which 3 products have sold the most units?
+  sql: |-
+    SELECT p.product_name, sum(od.quantity) AS units_sold
+    FROM order_details od
+    JOIN products p ON p.product_id = od.product_id
+    GROUP BY p.product_name
+    ORDER BY units_sold DESC
+    LIMIT 3
+
+- id: nw-16
+  question: Which employee handled the most orders?
+  sql: |-
+    SELECT e.first_name, e.last_name, count(*) AS orders
+    FROM orders o
+    JOIN employees e ON e.employee_id = o.employee_id
+    GROUP BY e.employee_id, e.first_name, e.last_name
+    ORDER BY orders DESC
+    LIMIT 1
+
+# --- date ranges ---
+- id: nw-17
+  question: How many orders were placed last month?
+  sql: |-
+    SELECT count(*) AS orders
+    FROM orders
+    WHERE order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+      AND order_date < date_trunc('month', CURRENT_DATE)
+
+- id: nw-18
+  question: What was the monthly revenue in 2025?
+  sql: |-
+    SELECT date_trunc('month', o.order_date)::date AS month,
+           round(sum(od.unit_price * od.quantity * (1 - od.discount))::numeric, 2) AS revenue
+    FROM orders o
+    JOIN order_details od ON od.order_id = o.order_id
+    WHERE o.order_date >= DATE '2025-01-01' AND o.order_date < DATE '2026-01-01'
+    GROUP BY 1
+    ORDER BY 1
+
+- id: nw-19
+  question: Which orders were shipped after their required date?
+  sql: |-
+    SELECT order_id, customer_id, required_date, shipped_date,
+           shipped_date - required_date AS days_late
+    FROM orders
+    WHERE shipped_date > required_date
+    ORDER BY days_late DESC
+
+- id: nw-20
+  question: How many orders were placed each year?
+  sql: |-
+    SELECT extract(year FROM order_date)::int AS year, count(*) AS orders
+    FROM orders
+    GROUP BY 1
+    ORDER BY 1
+
+- id: nw-21
+  question: Which orders from the last 90 days have not shipped yet?
+  sql: |-
+    SELECT order_id, customer_id, order_date, required_date
+    FROM orders
+    WHERE shipped_date IS NULL
+      AND order_date >= CURRENT_DATE - 90
+    ORDER BY order_date
+
+- id: nw-22
+  question: What is the average number of days between order and shipment for each shipper?
+  sql: |-
+    SELECT s.company_name AS shipper,
+           round(avg(o.shipped_date - o.order_date), 1) AS avg_days_to_ship
+    FROM orders o
+    JOIN shippers s ON s.shipper_id = o.ship_via
+    WHERE o.shipped_date IS NOT NULL
+    GROUP BY s.company_name
+    ORDER BY avg_days_to_ship
+
+# --- window functions ---
+- id: nw-23
+  question: Rank the products in each category by unit price.
+  sql: |-
+    SELECT c.category_name, p.product_name, p.unit_price,
+           rank() OVER (PARTITION BY c.category_name ORDER BY p.unit_price DESC) AS price_rank
+    FROM products p
+    JOIN categories c ON c.category_id = p.category_id
+    ORDER BY c.category_name, price_rank
+
+- id: nw-24
+  question: What is the best-selling product in each category by revenue?
+  sql: |-
+    WITH product_revenue AS (
+      SELECT p.category_id, p.product_name,
+             sum(od.unit_price * od.quantity * (1 - od.discount)) AS revenue
+      FROM order_details od
+      JOIN products p ON p.product_id = od.product_id
+      GROUP BY p.category_id, p.product_name
+    ), ranked AS (
+      SELECT category_id, product_name, revenue,
+             row_number() OVER (PARTITION BY category_id ORDER BY revenue DESC) AS rn
+      FROM product_revenue
+    )
+    SELECT c.category_name, r.product_name, round(r.revenue::numeric, 2) AS revenue
+    FROM ranked r
+    JOIN categories c ON c.category_id = r.category_id
+    WHERE r.rn = 1
+    ORDER BY revenue DESC
+
+- id: nw-25
+  question: Show the running total of revenue by month.
+  sql: |-
+    WITH monthly AS (
+      SELECT date_trunc('month', o.order_date)::date AS month,
+             sum(od.unit_price * od.quantity * (1 - od.discount)) AS revenue
+      FROM orders o
+      JOIN order_details od ON od.order_id = o.order_id
+      GROUP BY 1
+    )
+    SELECT month, round(revenue::numeric, 2) AS revenue,
+           round(sum(revenue) OVER (ORDER BY month)::numeric, 2) AS running_total
+    FROM monthly
+    ORDER BY month
+
+- id: nw-26
+  question: How did each month's order count change compared with the previous month?
+  sql: |-
+    WITH monthly AS (
+      SELECT date_trunc('month', order_date)::date AS month, count(*) AS orders
+      FROM orders
+      GROUP BY 1
+    )
+    SELECT month, orders,
+           orders - lag(orders) OVER (ORDER BY month) AS change_from_previous
+    FROM monthly
+    ORDER BY month
+
+- id: nw-27
+  question: What share of total revenue does each country account for?
+  sql: |-
+    SELECT o.ship_country AS country,
+           round(sum(od.unit_price * od.quantity * (1 - od.discount))::numeric, 2) AS revenue,
+           round((100 * sum(od.unit_price * od.quantity * (1 - od.discount))
+             / sum(sum(od.unit_price * od.quantity * (1 - od.discount))) OVER ())::numeric, 1)
+             AS pct_of_total
+    FROM orders o
+    JOIN order_details od ON od.order_id = o.order_id
+    GROUP BY o.ship_country
+    ORDER BY revenue DESC
