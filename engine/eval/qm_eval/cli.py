@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from qm_engine.config import EngineConfig
+from qm_engine.execution.postgres import use_selector_event_loop_on_windows
 from qm_engine.llm.client import LLMClient, OpenAICompatibleClient
 from qm_engine.llm.embeddings import Embedder, OllamaEmbedder
 from qm_engine.observability import configure_logging
@@ -173,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run" and args.max_corrections < 0:
         parser.error("--max-corrections must be 0 or more")
     configure_logging(target="stderr")  # stdout carries the result
+    use_selector_event_loop_on_windows()
     if args.command == "compare":
         for d in (args.run_a, args.run_b):
             if not (d / "results.jsonl").is_file():

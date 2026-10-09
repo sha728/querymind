@@ -4,7 +4,42 @@ from pathlib import Path
 
 import pytest
 
+from qm_engine.config import EngineConfig
+from qm_engine.execution.postgres import connect_ro, use_selector_event_loop_on_windows
+
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+
+use_selector_event_loop_on_windows()  # psycopg async needs it on Windows hosts
+
+
+@pytest.fixture(scope="session")
+def target_cfg() -> EngineConfig:
+    """Config for the running target-db (from .env); skips when it is not reachable.
+
+    Integration tests need `docker compose up target-db` (design §13.1). In CI the database
+    service arrives with T46; until then these tests skip.
+    """
+    import asyncio
+
+    try:
+        cfg = EngineConfig(cerebras_api_key="unused-in-db-tests")  # type: ignore[call-arg]
+    except Exception as e:
+        pytest.skip(f"target-db settings unavailable: {e}")
+    if cfg.target_db_ro_password is None:
+        pytest.skip("TARGET_DB_RO_PASSWORD not set; start target-db with docker compose")
+
+    async def probe() -> None:
+        conn = await connect_ro(cfg)
+        await conn.close()
+
+    try:
+        asyncio.run(probe())
+    except Exception as e:
+        pytest.skip(
+            f"target-db not reachable at {cfg.target_db_host}:{cfg.target_db_port} "
+            f"(run `docker compose up -d target-db`): {type(e).__name__}"
+        )
+    return cfg
 
 
 @pytest.fixture

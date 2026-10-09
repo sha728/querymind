@@ -246,7 +246,7 @@ def test_default_search_order_parent_then_cwd(
 
 def test_env_example_parses_with_host_values() -> None:
     cfg = EngineConfig(_env_file=REPO_ROOT / ".env.example", cerebras_api_key="k")
-    assert cfg.target_db_host == "localhost"
+    assert cfg.target_db_host == "127.0.0.1"  # not "localhost": IPv6 ::1 first on Windows
     assert cfg.target_db_port == 5433
     assert cfg.llm_provider == "cerebras"  # inline comment stripped
     assert cfg.llm_model == "gpt-oss-120b"
