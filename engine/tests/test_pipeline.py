@@ -378,3 +378,25 @@ async def test_correction_turn_matches_snapshot(snapshot: Callable[[str, str], N
     turns = llm.calls[1][2:]
     rendered = "\n\n".join(f"=== {m['role']} ===\n{m['content']}" for m in turns) + "\n"
     snapshot("prompts/pipeline-correction-turns.txt", rendered)
+
+
+# --- chart (T30, design §6.2 step 10) ---
+
+
+async def test_success_fills_chart() -> None:
+    ex = FakeExecutor(
+        result(
+            columns=[("country", "text"), ("singers", "integer")],
+            rows=[("France", 3), ("UK", 2)],
+        )
+    )
+    res = await pipeline(ScriptedLLM(GOOD), ex).run(QUESTION, SQLITE_SCHEMA)
+    assert res.chart is not None
+    assert (res.chart.recommended, res.chart.x, res.chart.y) == ("pie", "country", ("singers",))
+
+
+async def test_failed_or_blocked_has_no_chart() -> None:
+    blocked = await pipeline(ScriptedLLM("```sql\nDROP TABLE singer\n```"), FakeExecutor()).run(
+        QUESTION, SQLITE_SCHEMA
+    )
+    assert blocked.status == "blocked" and blocked.chart is None

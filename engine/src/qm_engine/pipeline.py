@@ -1,8 +1,8 @@
 """The single orchestration path shared by the product and the evaluation harness (design §6).
 
 Steps 1-9 and 12 of design §6.2: input checks, schema linking (T22), few-shot selection (T23),
-prompt, generation, extraction, validation, execution and self-correction (T24). Charts
-(step 10, T30) and summaries (step 11, T31) are added by later tasks.
+prompt, generation, extraction, validation, execution, self-correction (T24) and the chart
+recommendation (step 10, T30). Summaries (step 11, T31) are added later.
 
 LLM transport errors (``LLMError``) are not turned into a status: they propagate so the API can
 return 503 and the harness can apply its rate-limit rules (design §10.3, §12).
@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Literal
 
+from qm_engine.charts import ChartSpec, recommend_chart
 from qm_engine.config import EngineConfig
 from qm_engine.execution.base import ExecResult, ExecutionError, Executor, ResultColumn
 from qm_engine.extract import extract
@@ -92,6 +93,7 @@ class PipelineResult:
     few_shot_ids: tuple[str, ...] = ()
     timings: Timings = Timings()
     usage: Usage | None = None
+    chart: ChartSpec | None = None  # set on success (design §9)
 
     @property
     def row_count(self) -> int:
@@ -201,7 +203,13 @@ class Pipeline:
             message: str | None,
             exec_result: ExecResult | None = None,
         ) -> PipelineResult:
+            chart = (
+                recommend_chart(exec_result.columns, exec_result.rows)
+                if exec_result is not None
+                else None
+            )
             return PipelineResult(
+                chart=chart,
                 status=status,
                 sql=sql,
                 message=message,
@@ -250,7 +258,7 @@ class Pipeline:
             )
 
             if outcome.kind == "success":
-                # Steps 10-12: charts (T30) and summary (T31) are added later.
+                # Step 10 (chart) runs in finish(); step 11 (summary) arrives in T31.
                 return finish(
                     "success", sql=outcome.sql, message=None, exec_result=outcome.exec_result
                 )
