@@ -17,6 +17,7 @@ dependencies = [
     "httpx==0.28.1",
     "numpy==2.4.6",
     "psycopg[binary]==3.3.6",
+    "psycopg-pool==3.3.3",
     # Vendored Spider evaluation (eval/qm_eval/vendor/test_suite) needs these.
     "nltk==3.10.3",
     "sqlparse==0.6.0",

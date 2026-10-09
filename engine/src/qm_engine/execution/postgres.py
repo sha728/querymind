@@ -1,15 +1,20 @@
-"""PostgreSQL access for the product: the read-only connection (design §6.5, R1.1, R4.1).
+"""PostgreSQL access for the product: read-only connections and the query executor
+(design §6.5, R1.1, R4.1, R4.4, R5.1).
 
 Every connection uses the read-only role from configuration and runs read-only transactions.
-The query executor (T29) is added to this module.
 """
 
 import asyncio
 import sys
+from datetime import date, datetime, time
+from decimal import Decimal
 
 import psycopg
+from psycopg import sql
+from psycopg_pool import AsyncConnectionPool
 
 from qm_engine.config import EngineConfig
+from qm_engine.execution.base import ExecErrorCode, ExecResult, ExecutionError, ResultColumn
 
 CONNECT_TIMEOUT_S = 10
 
@@ -47,3 +52,119 @@ async def connect_ro(cfg: EngineConfig) -> psycopg.AsyncConnection:
     conn = await psycopg.AsyncConnection.connect(conninfo(cfg))
     await conn.set_read_only(True)
     return conn
+
+
+# --- query executor (T29, design §6.5) -------------------------------------------------
+
+# SQLSTATE -> engine error code. Read-only and privilege refusals are blocking: reaching them
+# means the validator let a write through (logged at ERROR by the pipeline).
+_SQLSTATE_CODES: dict[str, ExecErrorCode] = {
+    "57014": "TIMEOUT",  # query_canceled (statement_timeout)
+    "25006": "READ_ONLY_VIOLATION",  # read_only_sql_transaction
+    "42501": "READ_ONLY_VIOLATION",  # insufficient_privilege
+}
+
+# PostgreSQL type name (from the result OID) -> normalized type (design §4.2)
+_PG_TYPE_NORM: dict[str, str] = {
+    "int2": "integer",
+    "int4": "integer",
+    "int8": "integer",
+    "numeric": "numeric",
+    "float4": "numeric",
+    "float8": "numeric",
+    "money": "numeric",
+    "text": "text",
+    "varchar": "text",
+    "bpchar": "text",
+    "name": "text",
+    "bool": "boolean",
+    "date": "date",
+    "timestamp": "timestamp",
+    "timestamptz": "timestamp",
+}
+
+IDLE_IN_TRANSACTION_MARGIN_MS = 5000
+
+
+def encode_value(value: object) -> object:
+    """JSON-ready value (design §4.2): numbers stay numbers, dates become ISO strings."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime | date | time):
+        return value.isoformat()
+    if isinstance(value, bytes | bytearray | memoryview):
+        return "<binary>"
+    return value
+
+
+def _result_column(name: str, type_oid: int, conn: psycopg.AsyncConnection) -> ResultColumn:
+    """Name the result type from its OID and normalize it (design §4.2)."""
+    info = conn.adapters.types.get(type_oid)
+    pg_name = info.name if info is not None else str(type_oid)
+    return ResultColumn(name=name, norm_type=_PG_TYPE_NORM.get(pg_name, "other"), db_type=pg_name)
+
+
+def _message(e: psycopg.Error) -> str:
+    diag = e.diag
+    parts = [diag.message_primary or str(e).strip()]
+    if diag.message_hint:
+        parts.append(f"HINT: {diag.message_hint}")
+    return " ".join(parts)
+
+
+class PostgresExecutor:
+    """Runs one validated SELECT per call on a pooled read-only connection.
+
+    Per query: BEGIN READ ONLY; SET LOCAL statement_timeout; DECLARE a server-side cursor;
+    FETCH row_cap + 1; ROLLBACK. Fetching one extra row detects truncation without rewriting
+    the SQL, so the query's own ORDER BY is kept (design E2).
+    """
+
+    def __init__(self, cfg: EngineConfig, *, min_size: int = 1, max_size: int = 5) -> None:
+        self.pool = AsyncConnectionPool(
+            conninfo(cfg),
+            min_size=min_size,
+            max_size=max_size,
+            configure=self._configure,
+            open=False,
+        )
+
+    @staticmethod
+    async def _configure(conn: psycopg.AsyncConnection) -> None:
+        await conn.set_read_only(True)
+
+    async def open(self) -> None:
+        await self.pool.open(wait=True, timeout=CONNECT_TIMEOUT_S)
+
+    async def close(self) -> None:
+        await self.pool.close()
+
+    async def execute(self, sql_text: str, row_cap: int | None, timeout_ms: int) -> ExecResult:
+        try:
+            async with self.pool.connection() as conn, conn.transaction(force_rollback=True):
+                await conn.execute(
+                    sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(timeout_ms))
+                )
+                await conn.execute(
+                    sql.SQL("SET LOCAL idle_in_transaction_session_timeout = {}").format(
+                        sql.Literal(timeout_ms + IDLE_IN_TRANSACTION_MARGIN_MS)
+                    )
+                )
+                async with conn.cursor(name="qm_cur") as cur:
+                    await cur.execute(sql_text)  # type: ignore[arg-type]
+                    rows = (
+                        await cur.fetchall()
+                        if row_cap is None
+                        else await cur.fetchmany(row_cap + 1)
+                    )
+                    description = cur.description or []
+                    columns = tuple(_result_column(d.name, d.type_code, conn) for d in description)
+        except psycopg.Error as e:
+            code = _SQLSTATE_CODES.get(e.sqlstate or "", "EXECUTION_ERROR")
+            raise ExecutionError(code, _message(e)) from e
+
+        truncated = row_cap is not None and len(rows) > row_cap
+        if truncated:
+            rows = rows[:row_cap]
+        encoded = [tuple(encode_value(v) for v in row) for row in rows]
+        return ExecResult(columns=columns, rows=encoded, truncated=truncated)
