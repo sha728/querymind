@@ -1,0 +1,26 @@
+# QueryMind services (design §14.1). Built up task by task: target-db (T27) so far.
+# Values come from .env (copy .env.example). Container-network addresses are set here (design E9).
+
+services:
+  target-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${TARGET_DB_NAME:-northwind}
+      POSTGRES_USER: northwind_owner
+      POSTGRES_PASSWORD: ${TARGET_DB_OWNER_PASSWORD:?set TARGET_DB_OWNER_PASSWORD in .env}
+      TARGET_DB_RO_USER: ${TARGET_DB_RO_USER:-querymind_ro}
+      TARGET_DB_RO_PASSWORD: ${TARGET_DB_RO_PASSWORD:?set TARGET_DB_RO_PASSWORD in .env}
+    ports:
+      # Loopback only: reachable from this machine for host-run tests, never from the network.
+      - "127.0.0.1:${TARGET_DB_PORT:-5433}:5432"
+    volumes:
+      - target-db-data:/var/lib/postgresql/data
+      - ./db/target/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U northwind_owner -d ${TARGET_DB_NAME:-northwind}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  target-db-data:

@@ -57,6 +57,14 @@ Run folders live in `engine/eval/runs/` (git-ignored); each holds `config.json`,
    confirm it: every question made exactly 1 LLM call, `linking_applied` is false and
    `few_shot_ids` is empty for all 1,034 questions. The run is a true zero-shot baseline.
 
+## M2 — per-technique effect: not measured
+
+Schema linking (with FK bridging), similarity-selected few-shot examples and self-correction are
+implemented, tested and switchable in the harness (`--linking`, `--linking-top-k`, `--few-shot`,
+`--self-correction`; `qm-eval compare` for paired comparisons). The ablation runs (A1–A4) were
+**not performed** in v1 (owner decision, 2026-10-09): on the free tier they needed about 1.5 days
+of quota. No accuracy effect is claimed for any technique.
+
 ## A0 subset (iteration run, not reportable)
 
 | Run | Questions | EX | easy | medium | hard | extra |

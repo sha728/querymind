@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Binary files: never convert line endings
+*.sqlite binary
+*.npy binary
+*.png binary
+*.gif binary
+*.ico binary

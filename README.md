@@ -9,9 +9,10 @@ The text-to-SQL engine is **measured**, not just demoed: a harness scores it on 
 [Spider 1.0](https://yale-lily.github.io/spider) benchmark using the official execution-match
 code, and every reported number comes from a reproducible run in this repo.
 
-> **Status:** milestone M-A is complete (engine, safety validator, Spider harness, zero-shot
-> baseline). Next: schema linking, few-shot and self-correction, each measured separately (M-B),
-> then the .NET API and React UI (M-C).
+> **Status:** the engine, safety validator, Spider harness and zero-shot baseline are complete
+> (M-A). Schema linking, few-shot examples and self-correction are implemented and switchable in
+> the harness (M-B), but **their effect on accuracy has not been measured** (the ablation runs
+> were deferred). Next: the .NET API and React UI (M-C).
 
 ## Results
 
@@ -29,6 +30,8 @@ code, and every reported number comes from a reproducible run in this repo.
   p50 592.5 ms, p95 3,106 ms.
 - Cost: $0 billed (free tier); $0.3537 per 1,000 questions estimated at list price.
 - Safety test suite: 152 / 152 unsafe statements blocked (100%), printed by every `pytest` run.
+- Per-technique effect (schema linking, few-shot, self-correction): **not measured**. No claim is
+  made that any of them improves accuracy.
 <!-- metrics:end -->
 
 Details, provenance and notes for every number: [`docs/metrics.md`](docs/metrics.md).
