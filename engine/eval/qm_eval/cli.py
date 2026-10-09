@@ -3,10 +3,11 @@
     qm-eval run (--subset N | --full) [--seed 42] [--tag NAME] [--timeout-ms 30000]
                 [--resume RUN_DIR] [--data-root DIR] [--manifest FILE] [--runs-dir DIR]
     qm-eval cost RUN_DIR [--pricing FILE]
+    qm-eval compare RUN_A RUN_B
 
 Provider, model, reasoning effort and pacing come from the same environment / .env keys as
 the product (design E9, E11). `--linking`, `--few-shot` and `--self-correction` are added with
-their features (T22-T24); `compare` with T25.
+their features (T22-T24).
 
 Exit codes: 0 finished, 1 refused (manifest or resume mismatch), 2 usage error,
 75 interrupted by an LLM rate limit or outage (continue with --resume).
@@ -23,6 +24,7 @@ from qm_engine.config import EngineConfig
 from qm_engine.llm.client import LLMClient, OpenAICompatibleClient
 from qm_engine.llm.embeddings import Embedder, OllamaEmbedder
 from qm_engine.observability import configure_logging
+from qm_eval.compare import compare_runs, format_comparison
 from qm_eval.cost import DEFAULT_PRICING, compute_cost, format_report, load_pricing
 from qm_eval.runner import (
     DEFAULT_RUNS_DIR,
@@ -108,6 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     cost = sub.add_parser("cost", help="token totals and list-price cost per 1,000 questions")
     cost.add_argument("run_dir", type=Path)
     cost.add_argument("--pricing", type=Path, default=DEFAULT_PRICING)
+
+    cmp_ = sub.add_parser("compare", help="paired comparison of two runs (exact McNemar)")
+    cmp_.add_argument("run_a", type=Path, help="baseline run folder (e.g. A0)")
+    cmp_.add_argument("run_b", type=Path, help="run to compare against it")
     return parser
 
 
@@ -167,6 +173,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run" and args.max_corrections < 0:
         parser.error("--max-corrections must be 0 or more")
     configure_logging(target="stderr")  # stdout carries the result
+    if args.command == "compare":
+        for d in (args.run_a, args.run_b):
+            if not (d / "results.jsonl").is_file():
+                print(f"Refused: no results.jsonl in {d}", file=sys.stderr)
+                return EXIT_REFUSED
+        result = compare_runs(args.run_a, args.run_b)
+        print(format_comparison(result, args.run_a.name, args.run_b.name))
+        return EXIT_OK
     if args.command == "cost":
         try:
             print(format_report(compute_cost(args.run_dir, load_pricing(args.pricing))))
