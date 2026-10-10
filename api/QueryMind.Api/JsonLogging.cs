@@ -35,7 +35,26 @@ public static class JsonLogging
             // EF Core logs every SQL command at Information; keep warnings and errors only.
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
             .Enrich.FromLogContext()
+            .Filter.ByExcluding(IsMigrationHistoryProbe)
             .WriteTo.Sink(new TextWriterSink(Formatter(), output));
+
+    private const int EfCommandErrorEventId = 20102; // RelationalEventId.CommandError
+
+    /// <summary>
+    /// On a brand-new database, EF Core reads <c>__EFMigrationsHistory</c> before creating it and
+    /// logs the expected failure as an ERROR. Only that event is dropped; every other failed
+    /// command is still logged.
+    /// </summary>
+    internal static bool IsMigrationHistoryProbe(LogEvent logEvent)
+    {
+        ArgumentNullException.ThrowIfNull(logEvent);
+        return logEvent.Properties.TryGetValue("EventId", out var eventId)
+            && eventId is StructureValue structure
+            && structure.Properties.Any(p => p is { Name: "Id", Value: ScalarValue { Value: EfCommandErrorEventId } })
+            && logEvent.Properties.TryGetValue("commandText", out var command)
+            && command is ScalarValue { Value: string sql }
+            && sql.Contains("\"__EFMigrationsHistory\"", StringComparison.Ordinal);
+    }
 }
 
 /// <summary>Where log lines go: stdout in production, a buffer in tests.</summary>

@@ -49,7 +49,10 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
     });
 builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
-    .AddPolicy(AuthEndpoints.AdminPolicy, policy => policy.RequireRole(Roles.Admin));
+    .AddPolicy(AuthEndpoints.AdminPolicy, policy => policy
+        .RequireRole(Roles.Admin) // cheap pre-check on the token
+        .AddRequirements(new CurrentAdminRequirement())); // authoritative: the role in the app DB
+builder.Services.AddScoped<IAuthorizationHandler, CurrentAdminHandler>();
 
 // Health (design §11.5, R10.3): app DB now; the engine check is added in T38.
 builder.Services.AddHealthChecks().AddDbContextCheck<AppDbContext>("app_db");

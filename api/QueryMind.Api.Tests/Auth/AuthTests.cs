@@ -249,6 +249,40 @@ public sealed class AuthTests(PostgresServer server) : IAsyncLifetime
         Assert.Equal("user", (await Json(response)).GetProperty("role").GetString());
     }
 
+    [Fact]
+    public async Task DemotedAdmin_LosesAdminAccessAtOnce_EvenWithTheirOldToken()
+    {
+        var adminToken = await TokenFor(ApiFactory.AdminEmail, ApiFactory.AdminPassword);
+        var hanId = await RegisterId("han@example.com");
+        using (var promote = await SetRole(adminToken, hanId, "admin"))
+        {
+            Assert.Equal(HttpStatusCode.OK, promote.StatusCode);
+        }
+
+        var hanAdminToken = await TokenFor("han@example.com", "correct horse battery");
+        using (var demote = await SetRole(adminToken, hanId, "user"))
+        {
+            Assert.Equal(HttpStatusCode.OK, demote.StatusCode);
+        }
+
+        // The token still says role=admin, but the database no longer does.
+        Assert.Equal("admin", new JsonWebToken(hanAdminToken).GetClaim("role").Value);
+        using var response = await SetRole(hanAdminToken, await RegisterId("ivy@example.com"), "admin");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("FORBIDDEN", await ErrorCode(response));
+    }
+
+    [Fact]
+    public async Task TokenForADeletedOrUnknownUser_IsNotAdmin()
+    {
+        var token = ForgeToken(Guid.NewGuid().ToString(), ApiFactory.SigningKey, "querymind", DateTime.UtcNow);
+
+        using var response = await SetRole(token, Guid.NewGuid().ToString(), "admin");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
     [Theory]
     [InlineData("superuser", HttpStatusCode.BadRequest, "VALIDATION_FAILED")]
     [InlineData(null, HttpStatusCode.BadRequest, "VALIDATION_FAILED")]
