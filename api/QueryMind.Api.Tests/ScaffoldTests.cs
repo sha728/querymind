@@ -3,17 +3,24 @@ using System.Text.Json;
 
 namespace QueryMind.Api.Tests;
 
-public sealed class ScaffoldTests : IDisposable
+[Collection(ApiTestGroup.Name)]
+public sealed class ScaffoldTests(PostgresServer server) : IAsyncLifetime
 {
     private const string Header = "X-Correlation-ID";
-    private readonly ApiFactory _factory = new();
+    private ApiFactory _factory = null!;
 
-    public void Dispose() => _factory.Dispose();
+    public async Task InitializeAsync() => _factory = await ApiFactory.CreateAsync(server);
+
+    public Task DisposeAsync()
+    {
+        _factory.Dispose();
+        return Task.CompletedTask;
+    }
 
     // --- /health (R10.3) ---
 
     [Fact]
-    public async Task Health_IsAnonymousAndReturnsJson()
+    public async Task Health_IsAnonymousAndChecksTheAppDb()
     {
         using var client = _factory.CreateClient();
 
@@ -23,7 +30,7 @@ public sealed class ScaffoldTests : IDisposable
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("Healthy", body.RootElement.GetProperty("status").GetString());
-        Assert.Equal(JsonValueKind.Object, body.RootElement.GetProperty("checks").ValueKind);
+        Assert.Equal("Healthy", body.RootElement.GetProperty("checks").GetProperty("app_db").GetString());
     }
 
     // --- correlation ID (R10.1, design §11.1) ---
@@ -96,7 +103,8 @@ public sealed class ScaffoldTests : IDisposable
         {
             var requestLine = Assert.Single(
                 parsed,
-                doc => doc.RootElement.TryGetProperty("correlation_id", out var cid) && cid.GetString() == id);
+                doc => doc.RootElement.TryGetProperty("correlation_id", out var cid) && cid.GetString() == id
+                    && doc.RootElement.TryGetProperty("RequestPath", out _));
             var root = requestLine.RootElement;
             Assert.Equal("api", root.GetProperty("service").GetString());
             Assert.Equal("info", root.GetProperty("level").GetString());

@@ -32,6 +32,8 @@ public static class JsonLogging
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
+            // EF Core logs every SQL command at Information; keep warnings and errors only.
+            .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .WriteTo.Sink(new TextWriterSink(Formatter(), output));
 }
