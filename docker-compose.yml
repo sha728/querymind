@@ -1,4 +1,4 @@
-# QueryMind services (design §14.1). Built up task by task: target-db (T27), engine (T34).
+# QueryMind services (design §14.1). Built up task by task: target-db (T27), engine (T34), app-db (T36).
 # Values come from .env (copy .env.example). Container-network addresses are set here (design E9).
 
 services:
@@ -18,6 +18,22 @@ services:
       - ./db/target/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U northwind_owner -d ${TARGET_DB_NAME:-northwind}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${APP_DB_NAME:-querymind}
+      POSTGRES_USER: ${APP_DB_USER:?set APP_DB_USER in .env}
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+    # No published port: only the api service reaches it. Tables come from the api's EF Core
+    # migrations (design §5.1), applied when the api starts.
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -49,5 +65,6 @@ services:
       start_period: 10s
 
 volumes:
+  app-db-data:
   target-db-data:
   engine-cache:
