@@ -1,0 +1,5 @@
+**/bin
+**/obj
+QueryMind.Api.Tests
+**/*.user
+.vs
