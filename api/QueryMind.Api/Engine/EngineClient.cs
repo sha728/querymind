@@ -63,9 +63,26 @@ public sealed class EngineClient(HttpClient http, IOptions<EngineOptions> option
         AddHeaders(request, correlationId, userId, role);
 
         using var response = await SendAsync(request, cancel);
+        return await ReadOrThrowAsync<EngineQueryResponse>(response, cancel);
+    }
+
+    /// <summary><c>GET /v1/schema</c>, or <c>POST /v1/schema/refresh</c> when <paramref name="refresh"/>.</summary>
+    public async Task<EngineSchema> SchemaAsync(
+        bool refresh, string correlationId, string userId, string role, CancellationToken cancel)
+    {
+        using var request = new HttpRequestMessage(
+            refresh ? HttpMethod.Post : HttpMethod.Get, refresh ? "v1/schema/refresh" : "v1/schema");
+        AddHeaders(request, correlationId, userId, role);
+        using var response = await SendAsync(request, cancel);
+        return await ReadOrThrowAsync<EngineSchema>(response, cancel);
+    }
+
+    private static async Task<T> ReadOrThrowAsync<T>(HttpResponseMessage response, CancellationToken cancel)
+        where T : class
+    {
         if (response.IsSuccessStatusCode)
         {
-            var body = await ReadAsync<EngineQueryResponse>(response, cancel);
+            var body = await ReadAsync<T>(response, cancel);
             return body ?? throw Unavailable("The engine returned an empty response.");
         }
 

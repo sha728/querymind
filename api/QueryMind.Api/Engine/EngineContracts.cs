@@ -32,6 +32,14 @@ public sealed record EngineQueryResponse(
     EngineTimings? Timings,
     EngineUsage? Usage);
 
+public sealed record EngineSchemaColumn(string Name, string Type, bool Nullable, bool PrimaryKey, IReadOnlyList<string> Samples);
+
+public sealed record EngineForeignKey(IReadOnlyList<string> Columns, string RefTable, IReadOnlyList<string> RefColumns);
+
+public sealed record EngineSchemaTable(string Name, IReadOnlyList<EngineSchemaColumn> Columns, IReadOnlyList<EngineForeignKey> ForeignKeys);
+
+public sealed record EngineSchema(string SchemaHash, DateTimeOffset IntrospectedAt, string Dialect, IReadOnlyList<EngineSchemaTable> Tables);
+
 internal sealed record EngineErrorBody(EngineErrorDetail? Error);
 
 internal sealed record EngineErrorDetail(string? Code, string? Message);

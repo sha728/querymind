@@ -15,6 +15,33 @@ public sealed class FakeEngine : HttpMessageHandler
 
     public Func<HttpResponseMessage> OnQuery { get; set; } = () => Json(HttpStatusCode.OK, SuccessBody);
 
+    public Func<HttpResponseMessage> OnSchema { get; set; } = () => Json(HttpStatusCode.OK, SchemaBody("hash-1"));
+
+    public Func<HttpResponseMessage> OnRefresh { get; set; } = () => Json(HttpStatusCode.OK, SchemaBody("hash-2"));
+
+    public IReadOnlyList<RecordedRequest> Requests
+    {
+        get
+        {
+            lock (_requests)
+            {
+                return _requests.ToList();
+            }
+        }
+    }
+
+    public static string SchemaBody(string hash) => $$"""
+        { "schema_hash": "{{hash}}", "introspected_at": "2026-10-09T08:00:00Z", "dialect": "postgres",
+          "tables": [
+            { "name": "orders",
+              "columns": [ { "name": "order_id", "type": "integer", "nullable": false, "primary_key": true, "samples": ["10248", "10249"] },
+                           { "name": "customer_id", "type": "text", "nullable": true, "primary_key": false, "samples": ["VINET"] } ],
+              "foreign_keys": [ { "columns": ["customer_id"], "ref_table": "customers", "ref_columns": ["customer_id"] } ] },
+            { "name": "customers",
+              "columns": [ { "name": "customer_id", "type": "text", "nullable": false, "primary_key": true, "samples": ["VINET"] } ],
+              "foreign_keys": [] } ] }
+        """;
+
     public string HealthStatus { get; set; } = "ok";
 
     public bool Down { get; set; }
@@ -93,6 +120,8 @@ public sealed class FakeEngine : HttpMessageHandler
         {
             "/health" => Json(HttpStatusCode.OK, $$"""{"status":"{{HealthStatus}}"}"""),
             "/v1/query" => OnQuery(),
+            "/v1/schema" => OnSchema(),
+            "/v1/schema/refresh" => OnRefresh(),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         };
     }

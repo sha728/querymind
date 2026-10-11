@@ -10,6 +10,8 @@ using QueryMind.Api.Ask;
 using QueryMind.Api.Auth;
 using QueryMind.Api.Data;
 using QueryMind.Api.Engine;
+using QueryMind.Api.History;
+using QueryMind.Api.Schema;
 using Serilog;
 using Serilog.Context;
 
@@ -105,6 +107,8 @@ app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = HealthR
     .AllowAnonymous();
 app.MapAuthEndpoints();
 app.MapAskEndpoints();
+app.MapHistoryEndpoints();
+app.MapSchemaEndpoints();
 
 await AppDatabase.InitializeAsync(app.Services);
 await app.RunAsync();
