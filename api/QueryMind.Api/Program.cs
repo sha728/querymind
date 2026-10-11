@@ -6,8 +6,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using QueryMind.Api;
+using QueryMind.Api.Ask;
 using QueryMind.Api.Auth;
 using QueryMind.Api.Data;
+using QueryMind.Api.Engine;
 using Serilog;
 using Serilog.Context;
 
@@ -54,8 +56,26 @@ builder.Services.AddAuthorizationBuilder()
         .AddRequirements(new CurrentAdminRequirement())); // authoritative: the role in the app DB
 builder.Services.AddScoped<IAuthorizationHandler, CurrentAdminHandler>();
 
-// Health (design §11.5, R10.3): app DB now; the engine check is added in T38.
-builder.Services.AddHealthChecks().AddDbContextCheck<AppDbContext>("app_db");
+// Engine (design §4.3): typed HttpClient with the 90 s timeout from §12.
+builder.Services.AddOptions<EngineOptions>()
+    .Configure<IConfiguration>(EngineOptions.Bind)
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<EngineOptions>, EngineOptionsValidator>();
+builder.Services.AddHttpClient<EngineClient>((services, http) =>
+{
+    var engine = services.GetRequiredService<IOptions<EngineOptions>>().Value;
+    http.BaseAddress = new Uri(engine.BaseUrl.ToString().TrimEnd('/') + "/");
+    http.Timeout = EngineOptions.Timeout;
+});
+
+// Ask (design §4.2): history persistence and the per-user rate limit.
+builder.Services.AddScoped<AskService>();
+builder.Services.AddAskRateLimit();
+
+// Health (design §11.5, R10.3): app DB and engine.
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>("app_db")
+    .AddCheck<EngineHealthCheck>("engine");
 
 var app = builder.Build();
 
@@ -79,10 +99,12 @@ app.Use(async (context, next) =>
     }
 });
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = HealthResponse.WriteAsync })
     .AllowAnonymous();
 app.MapAuthEndpoints();
+app.MapAskEndpoints();
 
 await AppDatabase.InitializeAsync(app.Services);
 await app.RunAsync();

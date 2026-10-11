@@ -20,6 +20,15 @@ internal static partial class Log
     [LoggerMessage(Level = LogLevel.Information, Message = "role_changed {target_user_id} {from_role} -> {to_role}")]
     public static partial void RoleChanged(ILogger logger, Guid target_user_id, string from_role, string to_role);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "ask_received {question_chars}")]
+    public static partial void AskReceived(ILogger logger, int question_chars);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ask_completed {status} {total_ms} {engine_total_ms}")]
+    public static partial void AskCompleted(ILogger logger, string status, int total_ms, int? engine_total_ms);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "engine_call_failed {code}: {detail}")]
+    public static partial void EngineCallFailed(ILogger logger, string code, string detail);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "app_db_migrated")]
     public static partial void AppDbMigrated(ILogger logger);
 

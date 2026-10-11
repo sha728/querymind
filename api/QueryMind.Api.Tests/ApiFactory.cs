@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using QueryMind.Api.Engine;
 using Testcontainers.PostgreSql;
 
 namespace QueryMind.Api.Tests;
@@ -43,6 +44,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public const string SigningKey = "test-signing-key-that-is-at-least-32-bytes-long";
     public const string AdminEmail = "admin@example.com";
     public const string AdminPassword = "admin-password-1";
+    public const string EngineKey = "test-engine-internal-key";
+
+    public FakeEngine Engine { get; } = new();
 
     private readonly StringWriter _logs = new();
     private readonly Dictionary<string, string?> _settings;
@@ -69,6 +73,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             ["JWT_AUDIENCE"] = "querymind",
             ["ADMIN_EMAIL"] = AdminEmail,
             ["ADMIN_PASSWORD"] = AdminPassword,
+            ["ENGINE_BASE_URL"] = "http://engine.test:8000",
+            ["ENGINE_INTERNAL_KEY"] = EngineKey,
         };
         foreach (var (key, value) in overrides ?? new Dictionary<string, string?>())
         {
@@ -97,7 +103,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         }
 
         builder.ConfigureServices(services =>
-            services.AddSingleton(new LogOutput(TextWriter.Synchronized(_logs))));
+        {
+            services.AddSingleton(new LogOutput(TextWriter.Synchronized(_logs)));
+            services.AddHttpClient<EngineClient>().ConfigurePrimaryHttpMessageHandler(() => Engine);
+        });
     }
 
     protected override void Dispose(bool disposing)

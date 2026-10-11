@@ -104,7 +104,8 @@ public sealed class ScaffoldTests(PostgresServer server) : IAsyncLifetime
             var requestLine = Assert.Single(
                 parsed,
                 doc => doc.RootElement.TryGetProperty("correlation_id", out var cid) && cid.GetString() == id
-                    && doc.RootElement.TryGetProperty("RequestPath", out _));
+                    && doc.RootElement.TryGetProperty("SourceContext", out var source)
+                    && source.GetString() == "Serilog.AspNetCore.RequestLoggingMiddleware");
             var root = requestLine.RootElement;
             Assert.Equal("api", root.GetProperty("service").GetString());
             Assert.Equal("info", root.GetProperty("level").GetString());

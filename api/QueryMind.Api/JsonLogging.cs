@@ -34,6 +34,8 @@ public static class JsonLogging
             .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
             // EF Core logs every SQL command at Information; keep warnings and errors only.
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+            // HttpClient logs four lines per engine call; ask_completed carries what matters.
+            .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .Filter.ByExcluding(IsMigrationHistoryProbe)
             .WriteTo.Sink(new TextWriterSink(Formatter(), output));
