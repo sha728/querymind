@@ -162,6 +162,70 @@ td.null {
   background: #fcfcfb;
 }
 
+.app-header nav {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.app-header nav a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+.app-header nav a.active {
+  color: #1f2328;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.badge {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border: 1px solid #d1d9e0;
+  border-radius: 1rem;
+  font-size: 0.8rem;
+}
+
+.toggle,
+.filter {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.status-failed,
+.status-blocked,
+.status-error {
+  color: #b42318;
+}
+
+.rerun-result {
+  border: 1px solid #d1d9e0;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.rerun-result h2 {
+  font-size: 1rem;
+  margin-top: 0;
+}
+
+.schema-table h2 {
+  font-size: 1.05rem;
+  margin-bottom: 0.25rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .attempt-error {
   color: #b42318;
 }

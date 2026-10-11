@@ -17,5 +17,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     restoreMocks: true,
+    // jsdom + user-event tests that page through 60 rows take ~5 s when all files run in parallel.
+    testTimeout: 15_000,
   },
 })

@@ -45,11 +45,11 @@ export function askResponse(overrides: Partial<AskResponse> = {}): AskResponse {
 }
 
 /** Puts a valid signed-in session in sessionStorage, as if the user had logged in. */
-export function signInAs(email = 'ana@example.com'): void {
+export function signInAs(email = 'ana@example.com', role: 'user' | 'admin' = 'user'): void {
   const token = 'token-signed-in'
   fakeApi.validTokens.add(token)
   sessionStorage.setItem('qm.token', token)
-  sessionStorage.setItem('qm.user', JSON.stringify({ id: 'u-1', email, role: 'user' }))
+  sessionStorage.setItem('qm.user', JSON.stringify({ id: 'u-1', email, role }))
   sessionStorage.setItem('qm.expiresAt', new Date(Date.now() + 60 * 60 * 1000).toISOString())
 }
 

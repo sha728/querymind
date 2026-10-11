@@ -72,6 +72,25 @@ export interface AskResponse {
   usage: { model: string | null; promptTokens: number | null; completionTokens: number | null } | null
 }
 
+/** GET /api/history and /api/admin/history (design §4.2); userEmail only on the admin list. */
+export interface HistoryItem {
+  id: string
+  question: string
+  status: AskStatus | 'error'
+  finalSql: string | null
+  rowCount: number | null
+  totalMs: number | null
+  createdAt: string
+  userEmail?: string
+}
+
+export interface HistoryPage {
+  page: number
+  pageSize: number
+  total: number
+  items: HistoryItem[]
+}
+
 export interface SchemaResponse {
   schemaHash: string
   introspectedAt: string
