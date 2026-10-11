@@ -38,3 +38,109 @@ button {
 [role='alert'] {
   color: #b42318;
 }
+
+.muted {
+  color: #59636e;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.ask-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ask-form textarea {
+  font: inherit;
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+.ask-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.over-limit {
+  color: #b42318;
+}
+
+.summary {
+  font-size: 1.1rem;
+}
+
+.truncated-banner {
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  padding: 0.5rem 0.75rem;
+}
+
+.outcome {
+  border-left: 4px solid currentColor;
+  padding: 0.5rem 0.75rem;
+}
+
+.cannot-answer {
+  color: #59636e;
+}
+
+.sql-panel pre,
+.attempts pre {
+  background: #f6f8fa;
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+.sql-header {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.sql-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #d1d9e0;
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+}
+
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+td.null {
+  color: #818b98;
+  font-style: italic;
+}
+
+.pager {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.attempt-error {
+  color: #b42318;
+}

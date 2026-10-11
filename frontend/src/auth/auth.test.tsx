@@ -18,10 +18,10 @@ describe('login', () => {
     await user.type(screen.getByLabelText('Password'), PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByText('Connected to a database with 2 tables.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Ask about your data' })).toBeInTheDocument()
     expect(sessionStorage.getItem('qm.token')).toBe('token-u-1')
     expect(localStorage.length).toBe(0) // never localStorage
-    expect(screen.getByText('Signed in as ana@example.com')).toBeInTheDocument()
+    expect(screen.getByText('ana@example.com')).toBeInTheDocument()
   })
 
   it('shows the API message on a wrong password and stores nothing', async () => {
@@ -57,7 +57,7 @@ describe('register', () => {
     await user.type(screen.getByLabelText('Password'), PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByText('Connected to a database with 2 tables.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Ask about your data' })).toBeInTheDocument()
     expect(sessionStorage.getItem('qm.token')).toMatch(/^token-/)
   })
 
@@ -91,7 +91,9 @@ describe('session expiry', () => {
     sessionStorage.setItem('qm.user', JSON.stringify({ id: 'u-9', email: 'old@example.com', role: 'user' }))
     sessionStorage.setItem('qm.expiresAt', new Date(Date.now() + 60_000).toISOString())
 
-    renderApp('/')
+    const { user } = renderApp('/')
+    await user.type(screen.getByLabelText('Question'), 'How many orders?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
 
     expect(await screen.findByText('Your session has ended. Please sign in again.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Sign in to QueryMind' })).toBeInTheDocument()
