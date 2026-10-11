@@ -57,13 +57,20 @@ export function HistoryPage() {
 
   return (
     <>
-      <h1>History</h1>
-      {isAdmin && (
-        <label className="toggle">
-          <input type="checkbox" checked={allUsers} onChange={(e) => { setAllUsers(e.target.checked); setPageNo(1) }} />
-          All users
-        </label>
-      )}
+      <div className="page-header toolbar">
+        <div>
+          <h1>History</h1>
+          <p className="lede">
+            {allUsers ? 'Every user’s questions, newest first.' : 'Your questions, newest first. Re-run one to ask it again.'}
+          </p>
+        </div>
+        {isAdmin && (
+          <label className="toggle">
+            <input type="checkbox" checked={allUsers} onChange={(e) => { setAllUsers(e.target.checked); setPageNo(1) }} />
+            All users
+          </label>
+        )}
+      </div>
       {error !== null && <ErrorNotice error={error} />}
 
       {rerunResult !== null && (
@@ -73,19 +80,23 @@ export function HistoryPage() {
         </section>
       )}
 
-      {page !== null && page.total === 0 && <p>No questions yet. Ask one on the Ask page.</p>}
+      {page !== null && page.total === 0 && (
+        <div className="card empty-state">
+          <p>No questions yet. Ask one on the Ask page.</p>
+        </div>
+      )}
       {page !== null && page.total > 0 && (
-        <>
+        <div className="card">
           <div className="table-scroll">
-            <table aria-label="Question history">
+            <table aria-label="Question history" className="history-table">
               <thead>
                 <tr>
                   <th scope="col">When</th>
                   {allUsers && <th scope="col">User</th>}
                   <th scope="col">Question</th>
                   <th scope="col">Outcome</th>
-                  <th scope="col">Rows</th>
-                  <th scope="col">Time</th>
+                  <th scope="col" className="num">Rows</th>
+                  <th scope="col" className="num">Time</th>
                   <th scope="col"><span className="visually-hidden">Actions</span></th>
                 </tr>
               </thead>
@@ -101,6 +112,7 @@ export function HistoryPage() {
                     <td>
                       <button
                         type="button"
+                        className="small"
                         aria-label={`Re-run: ${item.question}`}
                         disabled={rerunning !== null}
                         onClick={() => void rerun(item)}
@@ -118,7 +130,7 @@ export function HistoryPage() {
             <span>Page {pageNo} of {pages} · {page.total} questions</span>
             <button type="button" onClick={() => { setPageNo(pageNo + 1) }} disabled={pageNo >= pages}>Next</button>
           </nav>
-        </>
+        </div>
       )}
     </>
   )

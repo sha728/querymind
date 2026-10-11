@@ -115,6 +115,19 @@ def test_id_columns_are_not_measures(name: str) -> None:
     assert spec == TABLE_ONLY  # an id is not a quantity to chart
 
 
+def test_label_axis_skips_identifier_codes() -> None:
+    spec = recommend_chart(
+        cols("customer_id:text", "company_name:text", "total_spent:numeric"),
+        [("ERNSH", "Ernst Handel", 5218.0), ("SAVEA", "Save-a-lot Markets", 4330.4)],
+    )
+    assert (spec.recommended, spec.x) == ("bar", "company_name")
+
+
+def test_label_axis_keeps_an_id_when_it_is_the_only_category() -> None:
+    spec = recommend_chart(cols("customer_id:text", "orders:integer"), rows(4, "ALFKI", 6))
+    assert spec.x == "customer_id"
+
+
 def test_boolean_is_categorical() -> None:
     spec = recommend_chart(
         cols("discontinued:boolean", "products:integer"), [(True, 8), (False, 69)]

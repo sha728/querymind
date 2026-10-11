@@ -33,7 +33,7 @@ export function ResultTable({ columns, rows, rowsPerPage = ROWS_PER_PAGE }: Prop
           <thead>
             <tr>
               {columns.map((c) => (
-                <th key={c.name} scope="col" title={c.dbType}>{c.name}</th>
+                <th key={c.name} scope="col" title={c.dbType} className={NUMERIC_TYPES.has(c.type) ? 'num' : undefined}>{c.name}</th>
               ))}
             </tr>
           </thead>

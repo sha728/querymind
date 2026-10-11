@@ -1,6 +1,7 @@
 import { useState, type SyntheticEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { ApiError } from '../api/client'
+import { Brand } from '../components/Logo'
 import { useAuth } from './AuthContext'
 
 const MIN_PASSWORD_LENGTH = 8 // design §4.2
@@ -32,23 +33,28 @@ export function RegisterPage() {
   }
 
   return (
-    <main className="auth-page">
-      <h1>Create an account</h1>
-      <form onSubmit={(e) => void onSubmit(e)} aria-label="Create account">
-        <label>
-          Email
-          <input type="email" autoComplete="username" required value={email} onChange={(e) => { setEmail(e.target.value) }} />
-        </label>
-        <label>
-          Password
-          <input type="password" autoComplete="new-password" required value={password} onChange={(e) => { setPassword(e.target.value) }} />
-        </label>
-        {error !== null && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
-      </form>
-      <p>
-        Already have an account? <Link to="/login">Sign in</Link>
-      </p>
+    <main className="auth-shell">
+      <section className="auth-page">
+        <Brand />
+        <h1>Create an account</h1>
+        <p className="lede">Free to use. You can ask questions as soon as you sign in.</p>
+        <form onSubmit={(e) => void onSubmit(e)} aria-label="Create account">
+          <label>
+            Email
+            <input type="email" autoComplete="username" required value={email} onChange={(e) => { setEmail(e.target.value) }} />
+          </label>
+          <label>
+            Password
+            <input type="password" autoComplete="new-password" required aria-describedby="password-hint" value={password} onChange={(e) => { setPassword(e.target.value) }} />
+          </label>
+          <span id="password-hint" className="field-hint">At least 8 characters.</span>
+          {error !== null && <p role="alert" className="form-error">{error}</p>}
+          <button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
+        </form>
+        <p>
+          Already have an account? <Link to="/login">Sign in</Link>
+        </p>
+      </section>
     </main>
   )
 }

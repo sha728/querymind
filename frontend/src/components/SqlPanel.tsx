@@ -19,10 +19,10 @@ export function SqlPanel({ sql, label = 'SQL' }: Props) {
   }
 
   return (
-    <section className="sql-panel" aria-label={label}>
+    <section className="card sql-panel" aria-label={label}>
       <div className="sql-header">
         <h2>{label}</h2>
-        <button type="button" onClick={() => void copy()}>Copy SQL</button>
+        <button type="button" className="small" onClick={() => void copy()}>Copy SQL</button>
         <span role="status">
           {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed: select the text instead' : ''}
         </span>

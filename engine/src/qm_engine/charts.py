@@ -50,6 +50,12 @@ def _is_categorical(c: ResultColumn) -> bool:
     return c.norm_type in ("text", "boolean")
 
 
+def _label_column(categorical: list[str]) -> str:
+    """The category axis: the first descriptive column, skipping identifier codes (``id``,
+    ``*_id``) when there is one, so bars read "Ernst Handel" rather than "ERNSH" (§9, v0.12)."""
+    return next((name for name in categorical if not _is_id(name)), categorical[0])
+
+
 def _non_negative(rows: Sequence[Sequence[object]], index: int) -> bool:
     values = [r[index] for r in rows if r[index] is not None]
     return bool(values) and all(isinstance(v, int | float) and v >= 0 for v in values)
@@ -83,7 +89,7 @@ def recommend_chart(columns: Sequence[ResultColumn], rows: Sequence[Sequence[obj
     # C4: categories against one to three measures.
     if categorical and 1 <= len(numeric) <= MAX_SERIES and 2 <= n_rows <= MAX_BAR_ROWS:
         allowed: tuple[ChartType, ...] = ("bar", "table", "pie") if pie_ok else ("bar", "table")
-        return ChartSpec("bar", allowed, x=categorical[0], y=tuple(numeric))
+        return ChartSpec("bar", allowed, x=_label_column(categorical), y=tuple(numeric))
 
     # C5: anything else.
     return TABLE_ONLY
