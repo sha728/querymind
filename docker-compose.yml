@@ -1,5 +1,6 @@
-# QueryMind services (design §14.1). Built up task by task: target-db (T27), engine (T34), app-db (T36).
-# Values come from .env (copy .env.example). Container-network addresses are set here (design E9).
+# QueryMind: the full stack (design §14.1). `docker compose up` starts all five services; open
+# http://localhost:8080. Values come from .env (copy .env.example). Container-network addresses
+# are set here (design E9). Ollama runs on the host (embeddings; see README).
 
 services:
   target-db:
@@ -63,6 +64,49 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+
+  api:
+    build: ./api
+    # Only what the api needs is passed in (not the whole .env: no LLM or target-DB secrets).
+    environment:
+      APP_DB_HOST: app-db
+      APP_DB_NAME: ${APP_DB_NAME:-querymind}
+      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env (at least 32 bytes)}
+      JWT_ISSUER: ${JWT_ISSUER:-querymind}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-querymind}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ENGINE_BASE_URL: http://engine:8000
+      ENGINE_INTERNAL_KEY: ${ENGINE_INTERNAL_KEY:?set ENGINE_INTERNAL_KEY in .env}
+    # No published port: the frontend's nginx proxies /api and /health to it.
+    depends_on:
+      app-db:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    healthcheck:
+      # 200 when Healthy or Degraded (engine down), 503 when the app DB is unreachable.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  frontend:
+    build: ./frontend
+    ports:
+      # The only published port. Loopback only by default; set FRONTEND_BIND=0.0.0.0 to expose it.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
 
 volumes:
   app-db-data:

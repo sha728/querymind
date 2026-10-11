@@ -12,7 +12,8 @@ code, and every reported number comes from a reproducible run in this repo.
 > **Status:** the engine, safety validator, Spider harness and zero-shot baseline are complete
 > (M-A). Schema linking, few-shot examples and self-correction are implemented and switchable in
 > the harness (M-B), but **their effect on accuracy has not been measured** (the ablation runs
-> were deferred). Next: the .NET API and React UI (M-C).
+> were deferred). The full app (.NET API, React UI, seeded Northwind demo database) runs with one
+> `docker compose up` (M-C).
 
 ## Results
 
@@ -49,6 +50,38 @@ Safety does not rely on the prompt: the database role is read-only, every query 
 read-only transaction, and the validator rejects anything that is not a single `SELECT` before
 any database contact.
 
+## Run the app with Docker
+
+Five services: `frontend` (React, served by nginx), `api` (ASP.NET Core: accounts, history),
+`engine` (Python: text-to-SQL), `app-db` (PostgreSQL for users and history) and `target-db`
+(the Northwind demo database, reached only through a read-only role).
+
+**Prerequisites**
+
+- Docker with Compose v2.
+- [Ollama](https://ollama.com) running on this machine with the embedding model:
+  `ollama pull nomic-embed-text`. It is used for schema linking and picking few-shot examples.
+- A free [Cerebras](https://cloud.cerebras.ai) API key for the language model (`gpt-oss-120b`).
+
+**Start**
+
+```
+cp .env.example .env      # then fill in every empty value (see the comments in the file)
+docker compose up --build
+```
+
+Open <http://localhost:8080>, create an account and ask, for example, *"Which 5 customers spent
+the most last month?"*. The first start builds the images and loads Northwind; later starts take
+seconds. The admin account from `ADMIN_EMAIL`/`ADMIN_PASSWORD` is created on the first start.
+
+- `http://localhost:8080/health` reports the whole stack (API, app database, engine).
+- Only the frontend port is published to the network side (`FRONTEND_BIND`, loopback by default).
+  The Northwind database also listens on `127.0.0.1:5433` so the host-run integration tests can
+  reach it; nothing else is published.
+- On the Cerebras free tier the client waits about 12 s between model calls, so an answer with a
+  summary takes roughly 15–20 s. `docker compose down` stops everything; add `-v` to also delete
+  the databases.
+
 ## Run the engine tests
 
 Requires Python 3.11. From `engine/`:
@@ -75,10 +108,15 @@ Full instructions, rate limits, resuming and exit codes: [`engine/eval/README.md
 ## Repository layout
 
 ```
-engine/            Python 3.11 text-to-SQL engine (pipeline, validator, executors, LLM client)
+engine/            Python 3.11 text-to-SQL engine (pipeline, validator, executors, LLM client, HTTP API)
 engine/eval/       Spider harness: qm-eval CLI, scoring (vendored official code), pricing
 engine/tests/      pytest suite, including the safety corpus
+api/               ASP.NET Core (.NET 10) API: auth, ask, history, schema proxy; xUnit tests
+frontend/          React + TypeScript (Vite) UI: ask, chart, history, schema; Vitest tests
+db/target/         Northwind seed, read-only role and date shift for the demo database
+docker-compose.yml the full stack
 docs/metrics.md    every measured number, with its run and configuration
 ```
 
-The .NET API (`/api`), React UI (`/frontend`) and seeded demo database (`/db`) arrive in milestone M-C.
+Other test suites: `dotnet test api/QueryMind.sln` (needs Docker for its PostgreSQL containers)
+and, from `frontend/`, `npm ci`, `npm run lint`, `npx tsc --noEmit`, `npm test`.
