@@ -12,21 +12,30 @@ SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 use_selector_event_loop_on_windows()  # psycopg async needs it on Windows hosts
 
 
+def _target_db_unavailable(reason: str) -> None:
+    """Skip locally; fail in CI, where QM_REQUIRE_TARGET_DB=1 (T46), so that the integration
+    tests can never pass by silently not running."""
+    if os.environ.get("QM_REQUIRE_TARGET_DB") == "1":
+        pytest.fail(f"target-db is required (QM_REQUIRE_TARGET_DB=1): {reason}")
+    pytest.skip(reason)
+
+
 @pytest.fixture(scope="session")
 def target_cfg() -> EngineConfig:
     """Config for the running target-db (from .env); skips when it is not reachable.
 
-    Integration tests need `docker compose up target-db` (design §13.1). In CI the database
-    service arrives with T46; until then these tests skip.
+    Integration tests need `docker compose up target-db` (design §13.1). CI starts it and sets
+    QM_REQUIRE_TARGET_DB=1, which turns these skips into failures.
     """
     import asyncio
 
     try:
         cfg = EngineConfig(cerebras_api_key="unused-in-db-tests")  # type: ignore[call-arg]
     except Exception as e:
-        pytest.skip(f"target-db settings unavailable: {e}")
+        _target_db_unavailable(f"target-db settings unavailable: {e}")
+        raise  # unreachable: skip/fail raise
     if cfg.target_db_ro_password is None:
-        pytest.skip("TARGET_DB_RO_PASSWORD not set; start target-db with docker compose")
+        _target_db_unavailable("TARGET_DB_RO_PASSWORD not set; start target-db with docker compose")
 
     async def probe() -> None:
         conn = await connect_ro(cfg)
@@ -35,7 +44,7 @@ def target_cfg() -> EngineConfig:
     try:
         asyncio.run(probe())
     except Exception as e:
-        pytest.skip(
+        _target_db_unavailable(
             f"target-db not reachable at {cfg.target_db_host}:{cfg.target_db_port} "
             f"(run `docker compose up -d target-db`): {type(e).__name__}"
         )
