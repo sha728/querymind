@@ -92,7 +92,7 @@ function ChartFigure({ title, type, children }: { title: string; type: ChartType
 
 function renderChart(type: Exclude<ChartType, 'table'>, data: Point[], series: { key: string; name: string; color: string }[], width: number) {
   const size = { width, height: SIZE.height }
-  const legend = series.length > 1 ? <Legend wrapperStyle={{ color: INK.secondary }} /> : null
+  const legend = series.length > 1 ? chartLegend() : null
   const tooltip = <Tooltip formatter={(value) => formatCell(typeof value === 'number' ? value : String(value))} />
   const axes = [
     <CartesianGrid key="grid" stroke={INK.grid} vertical={false} />,
@@ -130,7 +130,7 @@ function renderChart(type: Exclude<ChartType, 'table'>, data: Point[], series: {
       return (
         <PieChart {...size}>
           {tooltip}
-          <Legend wrapperStyle={{ color: INK.secondary }} />
+          {chartLegend()}
           {/* Each slice takes its slot colour from its data point's fill, in fixed order. */}
           <Pie data={data.map((point, i) => ({ ...point, fill: SERIES_COLORS[i] ?? INK.muted }))}
             dataKey={first.key} nameKey="x" name={first.name} outerRadius={120}
@@ -139,6 +139,19 @@ function renderChart(type: Exclude<ChartType, 'table'>, data: Point[], series: {
       )
     }
   }
+}
+
+/**
+ * Legend in data order (Recharts sorts by name by default), with labels in text ink: the swatch
+ * carries the series colour, the text never does (dataviz: text wears text tokens).
+ */
+function chartLegend() {
+  return (
+    <Legend
+      itemSorter={null}
+      formatter={(value: string) => <span style={{ color: INK.secondary }}>{value}</span>}
+    />
+  )
 }
 
 /** Rows to chart points: x is the category/time label, s0..s2 the measures (by index, so any column name is safe). */

@@ -72,6 +72,17 @@ describe('ResultChart renders the recommended chart (Recharts)', () => {
   })
 })
 
+describe('legend', () => {
+  it('follows the data (and colour) order, not alphabetical, with text in ink colour', async () => {
+    const { container } = render(<ResultChart {...PIE} />)
+
+    await waitFor(() => { expect(container.querySelectorAll('.recharts-legend-item')).toHaveLength(4) })
+    const items = [...container.querySelectorAll('.recharts-legend-item-text')]
+    expect(items.map((i) => i.textContent)).toEqual(['USA', 'France', 'Germany', 'Brazil'])
+    expect(items.map((i) => (i.querySelector('span') as HTMLElement).style.color)).toEqual(Array(4).fill('rgb(82, 81, 78)'))
+  })
+})
+
 describe('chart-type switcher (R6.2)', () => {
   it('offers only the allowed types, with the recommended one selected', () => {
     render(<ResultChart {...LINE} />)

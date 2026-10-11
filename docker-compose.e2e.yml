@@ -1,0 +1,34 @@
+# End-to-end test overlay (design §13.4, N2): the real stack with the LLM and embedding model
+# replaced by a deterministic stub. Only configuration changes; no product code has a test mode.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+#   cd e2e && npx playwright test
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+#
+# A separate project name keeps its containers and volumes apart from the dev stack, and its
+# frontend uses port 8081, so both can run at the same time.
+
+name: querymind-e2e
+
+services:
+  stub-llm:
+    build: ./e2e/stub-llm
+
+  engine:
+    environment:
+      QM_LLM_PROVIDER: ollama          # OpenAI-compatible, no API key
+      QM_LLM_BASE_URL: http://stub-llm:8000/v1
+      QM_LLM_MODEL: stub-model
+      QM_LLM_MIN_INTERVAL_S: "0"
+      QM_EMBED_BASE_URL: http://stub-llm:8000/v1
+      QM_EMBED_MODEL: stub-embed
+    depends_on:
+      stub-llm:
+        condition: service_healthy
+
+  target-db:
+    ports: !reset []                   # nothing on the host but the e2e frontend
+
+  frontend:
+    ports: !override
+      - "127.0.0.1:${E2E_PORT:-8081}:8080"
