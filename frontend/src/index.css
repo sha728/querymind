@@ -141,6 +141,27 @@ td.null {
   margin-top: 0.5rem;
 }
 
+.result-chart {
+  margin: 1rem 0;
+}
+
+.chart-switcher {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.chart-switcher button[aria-pressed='true'] {
+  background: #1f2328;
+  color: #ffffff;
+  border-color: #1f2328;
+}
+
+.chart-figure {
+  margin: 0;
+  background: #fcfcfb;
+}
+
 .attempt-error {
   color: #b42318;
 }

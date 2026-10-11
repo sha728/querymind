@@ -1,4 +1,4 @@
-import { useRef, useState, type SyntheticEvent } from 'react'
+import { lazy, Suspense, useRef, useState, type SyntheticEvent } from 'react'
 import { askQuestion, MAX_QUESTION_CHARS } from '../api/ask'
 import { ApiError } from '../api/client'
 import type { AskResponse } from '../api/types'
@@ -6,6 +6,9 @@ import { useAuth } from '../auth/AuthContext'
 import { AttemptsList } from '../components/AttemptsList'
 import { ResultTable } from '../components/ResultTable'
 import { SqlPanel } from '../components/SqlPanel'
+
+// Recharts is most of the bundle: load it only when the first chart is shown.
+const ResultChart = lazy(() => import('../components/ResultChart').then((m) => ({ default: m.ResultChart })))
 
 interface RequestError {
   message: string
@@ -105,6 +108,11 @@ function AskResult({ result }: { result: AskResponse }) {
               Showing the first {result.rowCount} rows. The result was cut off at the row limit, so there are more rows
               in the database.
             </p>
+          )}
+          {result.chart !== null && result.columns !== null && result.rows !== null && result.rows.length > 0 && (
+            <Suspense fallback={<p className="muted">Loading chart…</p>}>
+              <ResultChart chart={result.chart} columns={result.columns} rows={result.rows} />
+            </Suspense>
           )}
           {result.sql !== null && <SqlPanel sql={result.sql} />}
           <ResultTable columns={result.columns ?? []} rows={result.rows ?? []} />
